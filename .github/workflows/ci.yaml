@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: '**'
+
+jobs:
+  unit-tests:
+    name: unit-tests (consul-version=${{ matrix.consul-version}})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        consul-version:
+        - 1.13.1
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-go@v3
+      with:
+        go-version: '1.18'
+    - name: Install Consul
+      run: |
+        CONSUL_VERSION="${{ matrix.consul-version }}"
+        FILENAME="consul_${CONSUL_VERSION}_linux_amd64.zip"
+        curl -sSLO "https://releases.hashicorp.com/consul/${CONSUL_VERSION}/${FILENAME}" && \
+          unzip "${FILENAME}" -d /usr/local/bin && \
+          rm "${FILENAME}"
+        consul version
+    - name: Test
+      run: go test ./...
+  golangci:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-go@v3
+        with:
+          go-version: 1.18
+      - uses: actions/checkout@v3
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v3
