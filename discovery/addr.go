@@ -9,8 +9,8 @@ import (
 type addrStatus bool
 
 const (
-	OK    = true
-	NotOK = false
+	OK    addrStatus = true
+	NotOK addrStatus = false
 )
 
 type Addr struct {
@@ -21,7 +21,7 @@ type Addr struct {
 func MakeAddr(ipStr string, port int) (Addr, error) {
 	ip := net.ParseIP(ipStr)
 	if ip == nil {
-		return Addr{}, fmt.Errorf("unable to parse ip: %q", ip)
+		return Addr{}, fmt.Errorf("unable to parse ip: %q", ipStr)
 	}
 	return Addr{
 		TCPAddr: net.TCPAddr{

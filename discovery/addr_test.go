@@ -1,21 +1,35 @@
 package discovery
 
 import (
-	"net"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
+func TestMakeAddr(t *testing.T) {
+	_, err := MakeAddr("", 0)
+	require.Error(t, err)
+	require.Equal(t, `unable to parse ip: ""`, err.Error())
+
+	_, err = MakeAddr("asdf", 0)
+	require.Error(t, err)
+	require.Equal(t, `unable to parse ip: "asdf"`, err.Error())
+
+	a, err := MakeAddr("127.0.0.1", 0)
+	require.NoError(t, err)
+	require.Equal(t, a.String(), "127.0.0.1:0")
+
+	a, err = MakeAddr("127.0.0.1", 1234)
+	require.NoError(t, err)
+	require.Equal(t, a.String(), "127.0.0.1:1234")
+}
+
 func TestAddrEmpty(t *testing.T) {
 	a := Addr{}
 	require.True(t, a.Empty())
 
-	a = Addr{
-		TCPAddr: net.TCPAddr{
-			IP: net.ParseIP("127.0.0.1"),
-		},
-	}
+	a, err := MakeAddr("127.0.0.1", 0)
+	require.NoError(t, err)
 	require.False(t, a.Empty())
 }
 
@@ -23,12 +37,9 @@ func TestAddrSet(t *testing.T) {
 	addrs := []Addr{}
 
 	for i := 0; i < 6; i++ {
-		addrs = append(addrs, Addr{
-			TCPAddr: net.TCPAddr{
-				IP:   net.ParseIP("127.0.0.1"),
-				Port: i,
-			},
-		})
+		a, err := MakeAddr("127.0.0.1", i)
+		require.NoError(t, err)
+		addrs = append(addrs, a)
 	}
 
 	set := newAddrSet()

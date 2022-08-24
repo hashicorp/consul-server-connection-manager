@@ -2,6 +2,13 @@ package discovery
 
 import "crypto/tls"
 
+type CredentialsType string
+
+const (
+	CredentialsTypeStatic CredentialsType = "static"
+	CredentialsTypeLogin                  = "login"
+)
+
 type Config struct {
 	// Addresses is a DNS name or exec command for go-netaddrs.
 	Addresses string
@@ -24,7 +31,7 @@ type Credentials struct {
 	// Type is either "static" for a statically-configured ACL
 	// token, or "login" to obtain an ACL token by logging into a
 	// Consul auth method.
-	Type string
+	Type CredentialsType
 
 	// Static is used if Type is "static".
 	Static StaticTokenCredential
