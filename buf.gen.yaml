@@ -1,7 +1,3 @@
-# Generate from proto-public in consul.
-#
-#   buf generate --template buf.gen.yaml ../consul/proto-public/ \
-#     --exclude-path ../consul/proto-public/pbconnectca
 version: v1
 managed:
   enabled: true
