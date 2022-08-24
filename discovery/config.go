@@ -6,7 +6,7 @@ type CredentialsType string
 
 const (
 	CredentialsTypeStatic CredentialsType = "static"
-	CredentialsTypeLogin                  = "login"
+	CredentialsTypeLogin  CredentialsType = "login"
 )
 
 type Config struct {
