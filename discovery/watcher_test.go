@@ -15,11 +15,16 @@ import (
 func TestRun(t *testing.T) {
 	_, serverAddrs := consulServers(t, 3)
 
-	cfg := Config{}
-	w := NewWatcher(cfg, hclog.New(&hclog.LoggerOptions{
-		Name:  "watcher",
-		Level: hclog.Debug,
-	}))
+	ctx := context.Background()
+	w, err := NewWatcher(
+		ctx,
+		Config{},
+		hclog.New(&hclog.LoggerOptions{
+			Name:  "watcher",
+			Level: hclog.Debug,
+		}),
+	)
+	require.NoError(t, err)
 
 	// In order to test with local Consul tests servers, we set custom server ports,
 	// which we inject through custom interfaces. The Config and go-netaddrs and the
@@ -28,11 +33,11 @@ func TestRun(t *testing.T) {
 		addrs: serverAddrs,
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
 	// Start the Watcher. This blocks until initialization is complete.
-	state, err := w.Run(ctx)
+	go w.Run()
+	t.Cleanup(w.Stop)
+
+	state, err := w.State()
 	require.NoError(t, err)
 	require.NotNil(t, state)
 	require.NotNil(t, state, state.GRPCConn)

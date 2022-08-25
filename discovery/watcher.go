@@ -44,19 +44,22 @@ type InitState struct {
 type SubscribeState struct{}
 
 type Watcher struct {
+	ctx       context.Context
+	ctxCancel context.CancelFunc
+
 	config Config
 	log    hclog.Logger
 
 	currentServer atomic.Value
 
-	initComplete atomic.Value
-	conn         *grpc.ClientConn
-	resolver     *watcherResolver
-	token        string
+	initComplete *event
+	runComplete  *event
+	runOnce      sync.Once
 
-	backoff backoff.BackOff
-
-	once sync.Once
+	backoff  backoff.BackOff
+	conn     *grpc.ClientConn
+	resolver *watcherResolver
+	token    string
 
 	// interface to allow us to inject custom server ports for tests
 	discoverer Discoverer
@@ -67,7 +70,7 @@ type serverState struct {
 	dataplaneFeatures map[string]bool
 }
 
-func NewWatcher(config Config, log hclog.Logger) *Watcher {
+func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher, error) {
 	if log == nil {
 		log = hclog.NewNullLogger()
 	}
@@ -77,15 +80,41 @@ func NewWatcher(config Config, log hclog.Logger) *Watcher {
 	backoff.MaxElapsedTime = 0 // Allow backing off forever.
 
 	w := &Watcher{
-		config:     config,
-		log:        log,
-		backoff:    backoff,
-		resolver:   newResolver(log),
-		discoverer: NewNetaddrsDiscoverer(config, log),
+		config:       config,
+		log:          log,
+		backoff:      backoff,
+		resolver:     newResolver(log),
+		discoverer:   NewNetaddrsDiscoverer(config, log),
+		initComplete: newEvent(),
+		runComplete:  newEvent(),
 	}
-	w.initComplete.Store(false)
+
+	w.ctx, w.ctxCancel = context.WithCancel(ctx)
 	w.currentServer.Store(serverState{})
-	return w
+
+	var cred credentials.TransportCredentials
+	if tls := w.config.TLS; tls != nil {
+		cred = credentials.NewTLS(tls)
+	} else {
+		cred = insecure.NewCredentials()
+	}
+	dialOpts := []grpc.DialOption{
+		grpc.WithTransportCredentials(cred),
+		grpc.WithResolvers(w.resolver), // note: experimental api.
+		// TODO: Add interceptors here.
+		// TODO: Add custom grpc balancer here.
+	}
+
+	// Dial with "consul://" to trigger our custom resolver. We don't
+	// provide a server address. The connection will be updated by the
+	// Watcher via the custom resolver once an address is known.
+	conn, err := grpc.DialContext(w.ctx, "consul://", dialOpts...)
+	if err != nil {
+		return nil, err
+	}
+	w.conn = conn
+
+	return w, nil
 }
 
 func (w *Watcher) Subscribe() chan SubscribeState {
@@ -93,49 +122,29 @@ func (w *Watcher) Subscribe() chan SubscribeState {
 	panic("unimplemented")
 }
 
-// Run spawns a goroutine to watch for Consul server set changes.
-// It blocks to wait for initialization to complete, and returns
-// initial state or an error on failure.
-func (w *Watcher) Run(ctx context.Context) (*InitState, error) {
-	if w.conn == nil {
-		var cred credentials.TransportCredentials
-		if tls := w.config.TLS; tls != nil {
-			cred = credentials.NewTLS(tls)
-		} else {
-			cred = insecure.NewCredentials()
-		}
+// Run watches for Consul server set changes forever. Run should be called in a
+// goroutine. Run can be aborted by cancelling the context passed to NewWatcher
+// or by calling Stop. Call State after Run in order to wait for initialization
+// to complete.
+//
+//	w, _ := NewWatcher(ctx, ...)
+//	go w.Run()
+//	state, err := w.State()
+func (w *Watcher) Run() {
+	w.runOnce.Do(w.run)
+}
 
-		dialOpts := []grpc.DialOption{
-			grpc.WithTransportCredentials(cred),
-			grpc.WithResolvers(w.resolver), // note: experimental api.
-			// TODO: Add interceptors here.
-			// TODO: Add custom grpc balancer here.
-		}
-
-		// Dial with "consul://" to trigger our custom resolver. We don't
-		// provide a server address. The connection will be updated by the
-		// Watcher via the custom resolver once an address is known.
-		conn, err := grpc.DialContext(ctx, "consul://", dialOpts...)
-		if err != nil {
-			return nil, err
-		}
-		w.conn = conn
-	}
-
-	// Spawn our goroutine.
-	w.once.Do(func() { go w.run(ctx) })
-
-	// Wait for init to complete.
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(200 * time.Millisecond):
-		}
-
-		if w.initComplete.Load().(bool) {
-			break
-		}
+// State returns the current state. This blocks for initialization to complete,
+// after which it will have found a Consul server, completed ACL token login
+// (if applicable), and retrieved supported dataplane features.
+//
+// Run must be called or State will never return. State can be aborted by
+// cancelling the context passed to NewWatcher or by calling Stop.
+func (w *Watcher) State() (*InitState, error) {
+	select {
+	case <-w.ctx.Done():
+		return nil, w.ctx.Err()
+	case <-w.initComplete.Done():
 	}
 
 	current := w.currentServer.Load().(serverState)
@@ -147,7 +156,21 @@ func (w *Watcher) Run(ctx context.Context) (*InitState, error) {
 	}, nil
 }
 
-func (w *Watcher) run(ctx context.Context) {
+// Stop stops the Watcher after Run is called.
+// This cancels the Watcher's internal context.
+func (w *Watcher) Stop() {
+	// canceling the context will abort w.run()
+	w.ctxCancel()
+	// w.run() sets runComplete when it returns
+	<-w.runComplete.Done()
+
+	w.conn.Close()
+	// TODO: acl token logout?
+}
+
+func (w *Watcher) run() {
+	defer w.runComplete.SetDone()
+
 	// addrs is the current set of servers we know about.
 	var addrs *addrSet
 	var err error
@@ -158,7 +181,7 @@ func (w *Watcher) run(ctx context.Context) {
 		// When this successfully connects to a server, it returns the chosen
 		// server and the latest set of server addresses. If we get an error,
 		// then we retry with backoff.
-		addrs, err = w.nextServer(ctx, addrs)
+		addrs, err = w.nextServer(addrs)
 		if err != nil {
 			w.log.Error("run", "err", err.Error())
 		}
@@ -174,15 +197,15 @@ func (w *Watcher) run(ctx context.Context) {
 			return
 		}
 		select {
-		case <-ctx.Done():
-			w.log.Warn("aborting", "err", ctx.Err())
+		case <-w.ctx.Done():
+			w.log.Warn("aborting", "err", w.ctx.Err())
 			return
 		case <-time.After(duration):
 		}
 	}
 }
 
-func (w *Watcher) nextServer(ctx context.Context, addrs *addrSet) (*addrSet, error) {
+func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
 	w.log.Debug("Watcher.nextServer", "addrs", addrs.String())
 
 	defer func() {
@@ -213,7 +236,7 @@ func (w *Watcher) nextServer(ctx context.Context, addrs *addrSet) (*addrSet, err
 		}
 		if len(healthy) == 0 {
 			// No healthy servers. Re-run discovery.
-			found, err := w.discover(ctx)
+			found, err := w.discover()
 			if err != nil {
 				return nil, err
 			}
@@ -224,7 +247,7 @@ func (w *Watcher) nextServer(ctx context.Context, addrs *addrSet) (*addrSet, err
 		if len(healthy) > 0 {
 			// Choose a server as "current" and connect to it.
 			addr := healthy[0]
-			server, err := w.connect(ctx, addr)
+			server, err := w.connect(addr)
 			if err != nil {
 				addrs.Put(NotOK, addr)
 				// Return here in order to backoff between attempts to each server.
@@ -245,8 +268,8 @@ func (w *Watcher) nextServer(ctx context.Context, addrs *addrSet) (*addrSet, err
 	// TODO: wait for changes here (open the server watch stream, or sleep).
 	// For now, just sleep.
 	select {
-	case <-ctx.Done():
-		return addrs, ctx.Err()
+	case <-w.ctx.Done():
+		return addrs, w.ctx.Err()
 	case <-time.After(5 * time.Second):
 	}
 	return addrs, nil
@@ -254,8 +277,8 @@ func (w *Watcher) nextServer(ctx context.Context, addrs *addrSet) (*addrSet, err
 
 // discover runs (go-netaddrs) discovery to find server addresses.
 // It returns the set of found addresses, all marked "OK".
-func (w *Watcher) discover(ctx context.Context) (*addrSet, error) {
-	addrs, err := w.discoverer.Discover(ctx)
+func (w *Watcher) discover() (*addrSet, error) {
+	addrs, err := w.discoverer.Discover(w.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -268,35 +291,40 @@ func (w *Watcher) discover(ctx context.Context) (*addrSet, error) {
 // connect does initialization for the given address. This includes updating the
 // gRPC connection to use that address, doing the ACL token login (one time
 // only) and grabbing dataplane features for this server.
-func (w *Watcher) connect(ctx context.Context, addr Addr) (serverState, error) {
+func (w *Watcher) connect(addr Addr) (serverState, error) {
 	w.log.Debug("Watcher.connect", "addr", addr)
 
 	// Tell the gRPC connection to switch to the selected server.
-	err := w.switchServer(ctx, addr)
+	err := w.switchServer(addr)
 	if err != nil {
 		return serverState{}, err
 	}
 
 	// One time, do the ACL token login.
-	if !w.initComplete.Load().(bool) && w.token == "" {
-		switch w.config.Credentials.Type {
-		case CredentialsTypeStatic:
-			w.token = w.config.Credentials.Static.Token
-		case CredentialsTypeLogin:
-			// TODO: Support ACL token login.
-			panic("acl token login is unimplemented")
+	select {
+	case <-w.initComplete.Done():
+		// already done
+	default:
+		if w.token == "" {
+			switch w.config.Credentials.Type {
+			case CredentialsTypeStatic:
+				w.token = w.config.Credentials.Static.Token
+			case CredentialsTypeLogin:
+				// TODO: Support ACL token login.
+				panic("acl token login is unimplemented")
+			}
 		}
 	}
 
 	// Fetch dataplane features for this server.
-	features, err := w.getDataplaneFeatures(ctx)
+	features, err := w.getDataplaneFeatures()
 	if err != nil {
 		return serverState{}, err
 	}
 
 	// Set init complete here. This indicates to Run() that initialization
 	// we found a server, have a token, and fetched dataplane features.
-	w.initComplete.Store(true)
+	w.initComplete.SetDone()
 
 	return serverState{addr: addr, dataplaneFeatures: features}, nil
 }
@@ -306,7 +334,7 @@ func (w *Watcher) connect(ctx context.Context, addr Addr) (serverState, error) {
 // trying to use any "old" server(s). We want to be pretty sure that, after
 // this returns, the gRPC connection will send requests to the given server,
 // since the actual address the conection is using is abstracted away.
-func (w *Watcher) switchServer(ctx context.Context, to Addr) error {
+func (w *Watcher) switchServer(to Addr) error {
 	w.log.Debug("Watcher.switchServer", "to", to)
 	err := w.resolver.SetAddress(to)
 	if err != nil {
@@ -318,9 +346,9 @@ func (w *Watcher) switchServer(ctx context.Context, to Addr) error {
 	return nil
 }
 
-func (w *Watcher) getDataplaneFeatures(ctx context.Context) (map[string]bool, error) {
+func (w *Watcher) getDataplaneFeatures() (map[string]bool, error) {
 	client := pbdataplane.NewDataplaneServiceClient(w.conn)
-	resp, err := client.GetSupportedDataplaneFeatures(ctx, &pbdataplane.GetSupportedDataplaneFeaturesRequest{})
+	resp, err := client.GetSupportedDataplaneFeatures(w.ctx, &pbdataplane.GetSupportedDataplaneFeaturesRequest{})
 	if err != nil {
 		return nil, fmt.Errorf("checking supported features: %w", err)
 	}
