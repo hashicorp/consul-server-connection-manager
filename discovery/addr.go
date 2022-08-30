@@ -72,6 +72,14 @@ func (s *addrSet) Get(match addrStatus) []Addr {
 	return result
 }
 
+func (s *addrSet) Status(addr Addr) addrStatus {
+	s.Lock()
+	defer s.Unlock()
+
+	state, ok := s.data[addr.String()]
+	return addrStatus(ok && bool(state.addrStatus))
+}
+
 func (s *addrSet) String() string {
 	if s == nil {
 		return "<nil>"
