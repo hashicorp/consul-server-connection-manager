@@ -141,10 +141,9 @@ func (w *Watcher) Run() {
 // Run must be called or State will never return. State can be aborted by
 // cancelling the context passed to NewWatcher or by calling Stop.
 func (w *Watcher) State() (*InitState, error) {
-	select {
-	case <-w.ctx.Done():
-		return nil, w.ctx.Err()
-	case <-w.initComplete.Done():
+	err := w.initComplete.Wait(w.ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	current := w.currentServer.Load().(serverState)

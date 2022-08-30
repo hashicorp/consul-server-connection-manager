@@ -1,6 +1,9 @@
 package discovery
 
-import "sync"
+import (
+	"context"
+	"sync"
+)
 
 // event is a one time event that can be marked done.
 type event struct {
@@ -35,5 +38,15 @@ func (e *event) IsDone() bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// Wait waits until either the event or context is done.
+func (e *event) Wait(ctx context.Context) error {
+	select {
+	case <-e.Done():
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
