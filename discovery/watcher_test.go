@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/consul-server-connection-manager/internal/consul-proto/pbdataplane"
 	"github.com/hashicorp/consul-server-connection-manager/internal/consul-proto/pbserverdiscovery"
 	"github.com/hashicorp/consul/sdk/testutil"
+	"github.com/hashicorp/consul/sdk/testutil/retry"
 	"github.com/hashicorp/go-hclog"
 	"github.com/stretchr/testify/require"
 )
@@ -34,13 +36,23 @@ func TestRun(t *testing.T) {
 			},
 			serverConfigFn: enableACLsConfigFn,
 		},
+		"server watch disabled": {
+			config: Config{
+				ServerWatchDisabled:         true,
+				ServerWatchDisabledInterval: 1 * time.Second,
+			},
+		},
 	}
 	for name, c := range cases {
 		c := c
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			_, serverAddrs := consulServers(t, 3, c.serverConfigFn)
+			servers, serverAddrs := consulServers(t, 3, c.serverConfigFn)
+			serversByNodeId := map[string]*testutil.TestServer{}
+			for _, srv := range servers {
+				serversByNodeId[srv.Config.NodeID] = srv
+			}
 
 			ctx := context.Background()
 			w, err := NewWatcher(ctx, c.config, hclog.New(&hclog.LoggerOptions{
@@ -50,10 +62,15 @@ func TestRun(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			// In order to test with local Consul tests servers, we set custom server ports,
-			// which we inject through custom interfaces. The Config and go-netaddrs and the
-			// server watch stream do not support per-server ports.
+			// To test with local Consul servers, we inject custom server ports. The Config struct,
+			// go-netaddrs, and the server watch stream do not support per-server ports.
 			w.discoverer = &testDiscoverer{addrs: serverAddrs}
+			w.nodeToAddrFn = func(nodeID, addr string) (Addr, error) {
+				if srv, ok := serversByNodeId[nodeID]; ok {
+					return MakeAddr(addr, srv.Config.Ports.GRPC)
+				}
+				return Addr{}, fmt.Errorf("no test server with node id %q", nodeID)
+			}
 
 			// Start the Watcher.
 			go w.Run()
@@ -75,28 +92,59 @@ func TestRun(t *testing.T) {
 				require.Equal(t, state.Token, "")
 			}
 
-			// Make a gRPC request to check that the gRPC connection is working.
-			// This validates that the custom interceptor is injecting the ACL token.
-			{
-				unaryClient := pbdataplane.NewDataplaneServiceClient(state.GRPCConn)
-				resp, err := unaryClient.GetSupportedDataplaneFeatures(ctx, &pbdataplane.GetSupportedDataplaneFeaturesRequest{})
+			unaryClient := pbdataplane.NewDataplaneServiceClient(state.GRPCConn)
+			unaryRequest := func(t require.TestingT) {
+				req := &pbdataplane.GetSupportedDataplaneFeaturesRequest{}
+				resp, err := unaryClient.GetSupportedDataplaneFeatures(ctx, req)
 				require.NoError(t, err, "error from unary request")
 				require.NotNil(t, resp)
 			}
 
-			// Check the custom interceptor works for streams.
-			{
-				streamClient := pbserverdiscovery.NewServerDiscoveryServiceClient(state.GRPCConn)
+			streamClient := pbserverdiscovery.NewServerDiscoveryServiceClient(state.GRPCConn)
+			streamRequest := func(t require.TestingT) {
+				// It seems like the stream will not automatically switch servers via the resolver.
+				// It gets an address once when the stream is created.
 				stream, err := streamClient.WatchServers(ctx, &pbserverdiscovery.WatchServersRequest{})
-				require.NoError(t, err)
-				resp, err := stream.Recv()
-				require.NoError(t, err)
-				require.Len(t, resp.Servers, len(serverAddrs))
+				require.NoError(t, err, "opening stream")
+				_, err = stream.Recv()
+				require.NoError(t, err, "error from stream")
 			}
+
+			// Make a gRPC request to check that the gRPC connection is working.
+			// This validates that the custom interceptor is injecting the ACL token.
+			unaryRequest(t)
+			streamRequest(t)
+
+			// Stop the current server. The Watcher should switch servers.
+			currentServer, ok := servers[state.Address.String()]
+			require.True(t, ok)
+			t.Logf("stop server: %s", state.Address.String())
+			err = currentServer.Stop()
+			if err != nil {
+				// this seems to to just be "exit code 1"
+				t.Logf("warn: server stop error: %v", err)
+			}
+
+			// Wait for requests to eventually succeed after the Watcher switches servers.
+			retry.RunWith(retryTimeout(5*time.Second), t, func(r *retry.R) {
+				unaryRequest(r)
+				streamRequest(r)
+			})
+
+			newState, err := w.State()
+			require.NoError(t, err)
+			require.NotEqual(t, newState.Address, state.Address)
+
 			t.Logf("test successful")
 		})
 	}
+}
 
+func retryTimeout(timeout time.Duration) *retry.Timer {
+	return &retry.Timer{
+		Timeout: timeout,
+		Wait:    250 * time.Millisecond,
+	}
 }
 
 // A custom Discoverer allows us to inject custom addresses with ports, so that
@@ -113,7 +161,7 @@ func (t *testDiscoverer) Discover(ctx context.Context) ([]Addr, error) {
 }
 
 // consulServers starts a multi-server Consul test cluster. It returns map of the
-// server addresses (ip+port) to each server object, and the list of parsed
+// server gRPC addresses (ip+port) to each server object, and the list of parsed
 // server gRPC addresses.
 func consulServers(t *testing.T, n int, cb testutil.ServerConfigCallback) (map[string]*testutil.TestServer, []Addr) {
 	require.Greater(t, n, 0)

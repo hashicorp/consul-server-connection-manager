@@ -1,6 +1,9 @@
 package discovery
 
-import "crypto/tls"
+import (
+	"crypto/tls"
+	"time"
+)
 
 type CredentialsType string
 
@@ -9,22 +12,42 @@ const (
 	CredentialsTypeLogin  CredentialsType = "login"
 )
 
+const DefaultServerWatchDisabledInterval = 1 * time.Minute
+
 type Config struct {
 	// Addresses is a DNS name or exec command for go-netaddrs.
 	Addresses string
+
 	// GRPCPort is the gRPC port to connect to. This must be the
 	// same for all Consul servers for now. Defaults to 8502.
 	GRPCPort int
 
-	// ServerWatchDisabled disables opening the ServerWatch gRPC
-	// stream. This should be used when your Consul servers are
-	// behind a load balancer, for example, since the server addresses
-	// returned in the ServerWatch stream will differ from the load
-	// balancer address.
+	// ServerWatchDisabled disables opening the ServerWatch gRPC stream. This
+	// should be used when your Consul servers are behind a load balancer, for
+	// example, since the server addresses returned in the ServerWatch stream
+	// will differ from the load balancer address.
 	ServerWatchDisabled bool
 
+	// ServerWatchDisabledInterval is the amount of time to sleep
+	// ServerWatchDisabled=true or when connecting to a server that does not
+	// support the server watch stream. When the Watcher wakes up, it will
+	// check that the current server is still OK and then continue sleeping. If
+	// the current server is not OK, then it will switch to another server.
+	//
+	// This defaults to 1 minute.
+	ServerWatchDisabledInterval time.Duration
+
+	// TLS is the TLS settings to use for the gRPC connections to the Consul
+	// servers.
 	TLS         *tls.Config
 	Credentials Credentials
+}
+
+func (c Config) withDefaults() Config {
+	if c.ServerWatchDisabledInterval == 0 {
+		c.ServerWatchDisabledInterval = DefaultServerWatchDisabledInterval
+	}
+	return c
 }
 
 type Credentials struct {
