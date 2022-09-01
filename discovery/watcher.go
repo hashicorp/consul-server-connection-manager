@@ -59,7 +59,7 @@ type Watcher struct {
 	backoff  backoff.BackOff
 	conn     *grpc.ClientConn
 	resolver *watcherResolver
-	token    string
+	token    atomic.Value
 
 	// interface to allow us to inject custom server ports for tests
 	discoverer Discoverer
@@ -91,6 +91,7 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 
 	w.ctx, w.ctxCancel = context.WithCancel(ctx)
 	w.currentServer.Store(serverState{})
+	w.token.Store("")
 
 	var cred credentials.TransportCredentials
 	if tls := w.config.TLS; tls != nil {
@@ -101,7 +102,8 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 	dialOpts := []grpc.DialOption{
 		grpc.WithTransportCredentials(cred),
 		grpc.WithResolvers(w.resolver), // note: experimental api.
-		// TODO: Add interceptors here.
+		grpc.WithUnaryInterceptor(makeUnaryInterceptor(w)),
+		grpc.WithStreamInterceptor(makeStreamInterceptor(w)),
 		// TODO: Add custom grpc balancer here.
 	}
 
@@ -149,7 +151,7 @@ func (w *Watcher) State() (*InitState, error) {
 	current := w.currentServer.Load().(serverState)
 	return &InitState{
 		GRPCConn:          w.conn,
-		Token:             w.token,
+		Token:             w.token.Load().(string),
 		Address:           current.addr,
 		DataplaneFeatures: current.dataplaneFeatures,
 	}, nil
@@ -304,10 +306,10 @@ func (w *Watcher) connect(addr Addr) (serverState, error) {
 	case <-w.initComplete.Done():
 		// already done
 	default:
-		if w.token == "" {
+		if w.token.Load().(string) == "" {
 			switch w.config.Credentials.Type {
 			case CredentialsTypeStatic:
-				w.token = w.config.Credentials.Static.Token
+				w.token.Store(w.config.Credentials.Static.Token)
 			case CredentialsTypeLogin:
 				// TODO: Support ACL token login.
 				panic("acl token login is unimplemented")
