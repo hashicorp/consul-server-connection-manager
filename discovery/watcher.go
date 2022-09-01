@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/hashicorp/consul-server-connection-manager/internal/consul-proto/pbdataplane"
+	"github.com/hashicorp/consul-server-connection-manager/internal/consul-proto/pbserverdiscovery"
 )
 
 // InitState is the info a caller wants to know after initialization.
@@ -61,8 +62,10 @@ type Watcher struct {
 	resolver *watcherResolver
 	token    atomic.Value
 
-	// interface to allow us to inject custom server ports for tests
+	// interface to inject custom server ports for tests
 	discoverer Discoverer
+	// function to inject custom server ports for tests
+	nodeToAddrFn func(nodeID, addr string) (Addr, error)
 }
 
 type serverState struct {
@@ -79,6 +82,8 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 	backoff := backoff.NewExponentialBackOff()
 	backoff.MaxElapsedTime = 0 // Allow backing off forever.
 
+	config = config.withDefaults()
+
 	w := &Watcher{
 		config:       config,
 		log:          log,
@@ -87,8 +92,10 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 		discoverer:   NewNetaddrsDiscoverer(config, log),
 		initComplete: newEvent(),
 		runComplete:  newEvent(),
+		nodeToAddrFn: func(_, addr string) (Addr, error) {
+			return MakeAddr(addr, config.GRPCPort)
+		},
 	}
-
 	w.ctx, w.ctxCancel = context.WithCancel(ctx)
 	w.currentServer.Store(serverState{})
 	w.token.Store("")
@@ -221,44 +228,38 @@ func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
 		}
 	}()
 
-	// Reuse the current server if it is still "OK"
-	current := w.currentServer.Load().(serverState)
-	if addrs != nil && addrs.Status(current.addr) == OK {
-		// current server is okay
-	} else {
-		// Choose a server from the known "healthy" servers.
-		// If none are healthy, re-run address discovery.
-		// TODO: supporting filtering servers (by dataplane features)
-		w.currentServer.Store(serverState{})
+	// Choose a server from the known "healthy" servers.
+	// If none are healthy, re-run address discovery.
+	// TODO: supporting filtering servers (by dataplane features)
+	w.currentServer.Store(serverState{})
 
-		var healthy []Addr
-		if addrs != nil {
-			healthy = addrs.Get(OK)
+	var healthy []Addr
+	if addrs != nil {
+		healthy = addrs.Get(OK)
+	}
+	if len(healthy) == 0 {
+		// No healthy servers. Re-run discovery.
+		found, err := w.discover()
+		if err != nil {
+			return nil, err
 		}
-		if len(healthy) == 0 {
-			// No healthy servers. Re-run discovery.
-			found, err := w.discover()
-			if err != nil {
-				return nil, err
-			}
-			addrs = found
-			healthy = addrs.Get(OK)
-		}
-
-		if len(healthy) > 0 {
-			// Choose a server as "current" and connect to it.
-			addr := healthy[0]
-			server, err := w.connect(addr)
-			if err != nil {
-				addrs.Put(NotOK, addr)
-				// Return here in order to backoff between attempts to each server.
-				return addrs, err
-			}
-			w.currentServer.Store(server)
-		}
+		addrs = found
+		healthy = addrs.Get(OK)
 	}
 
-	current = w.currentServer.Load().(serverState)
+	if len(healthy) > 0 {
+		// Choose a server as "current" and connect to it.
+		addr := healthy[0]
+		server, err := w.connect(addr)
+		if err != nil {
+			addrs.Put(NotOK, addr)
+			// Return here in order to backoff between attempts to each server.
+			return addrs, err
+		}
+		w.currentServer.Store(server)
+	}
+
+	current := w.currentServer.Load().(serverState)
 	if current.addr.Empty() {
 		return addrs, fmt.Errorf("unable to connect to a server")
 	}
@@ -266,14 +267,14 @@ func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
 	w.log.Debug("connected to server", "addr", current.addr)
 	// TODO: if the current server changed, notify subscribers at this point.
 
-	// TODO: wait for changes here (open the server watch stream, or sleep).
-	// For now, just sleep.
-	select {
-	case <-w.ctx.Done():
-		return addrs, w.ctx.Err()
-	case <-time.After(5 * time.Second):
+	newAddrs, err := w.watch()
+	if newAddrs != nil {
+		addrs = newAddrs
 	}
-	return addrs, nil
+	if err != nil {
+		addrs.Put(NotOK, current.addr)
+	}
+	return addrs, err
 }
 
 // discover runs (go-netaddrs) discovery to find server addresses.
@@ -365,4 +366,85 @@ func (w *Watcher) getDataplaneFeatures() (map[string]bool, error) {
 	}
 
 	return features, nil
+}
+
+// watch blocks to wait for server set changes. This aborts on receiving an
+// error from the server, when the Watcher's context is cancelled, or (TODO)
+// when the Watcher is told to switch servers.
+//
+// This returns an addrSet containing the most recent set of servers. If the
+// addrSet is nil, then there were not changes seen to the server set. (This is
+// the case if the server watch stream is disabled.
+//
+// When this returns with an error, the current server should no longer be
+// considered "OK". This may return a non-nil addrSet and a non-nil error (it
+// will usually do this when the server watch stream is aborted).
+func (w *Watcher) watch() (*addrSet, error) {
+	current := w.currentServer.Load().(serverState)
+	if current.dataplaneFeatures["DATAPLANE_FEATURES_WATCH_SERVERS"] && !w.config.ServerWatchDisabled {
+		return w.watchStream()
+	} else {
+		return w.watchSleep()
+	}
+}
+
+// watchStream opens a gRPC stream to receive server set changes. This blocks
+// potentially forever.
+//
+// This may be aborted when the gRPC stream receives some error, when the
+// Watcher's context is cancelled, or (TODO) when the Watcher is told to switch
+// servers.
+//
+// If an error that aborts the gRPC stream, we pass the non-nil error back,
+// and the server is marked unhealthy elsewhere.
+func (w *Watcher) watchStream() (*addrSet, error) {
+	w.log.Debug("Watcher.watchStream")
+	client := pbserverdiscovery.NewServerDiscoveryServiceClient(w.conn)
+	serverStream, err := client.WatchServers(w.ctx, &pbserverdiscovery.WatchServersRequest{})
+	if err != nil {
+		w.log.Error("unable to open server watch stream", "error", err)
+		return nil, err
+	}
+
+	var set *addrSet
+	for {
+		// This blocks until there is a change from the server.
+		resp, err := serverStream.Recv()
+		if err != nil {
+			w.log.Error("failed to parse server address from watch stream", "error", err)
+			return set, err
+		}
+
+		// The set of servers from the stream is the best known set of servers to use.
+		set := newAddrSet()
+		for _, srv := range resp.Servers {
+			addr, err := w.nodeToAddrFn(srv.Id, srv.Address)
+			if err != nil {
+				// failed to parse address. ignore this server.
+				w.log.Warn(err.Error())
+				continue
+			}
+			set.Put(OK, addr)
+		}
+	}
+}
+
+// watchSleep is used when the server watch stream is not supported.
+// It may be interrupted if we are told to switch servers.
+func (w *Watcher) watchSleep() (*addrSet, error) {
+	w.log.Debug("Watcher.watchSleep", "interval", w.config.ServerWatchDisabledInterval)
+
+	for {
+		select {
+		case <-w.ctx.Done():
+			return nil, w.ctx.Err()
+		case <-time.After(w.config.ServerWatchDisabledInterval):
+		}
+
+		// is the server still OK?
+		_, err := w.getDataplaneFeatures()
+		if err != nil {
+			return nil, err
+		}
+	}
 }
