@@ -28,7 +28,7 @@ type Config struct {
 	// will differ from the load balancer address.
 	ServerWatchDisabled bool
 
-	// ServerWatchDisabledInterval is the amount of time to sleep
+	// ServerWatchDisabledInterval is the amount of time to sleep if
 	// ServerWatchDisabled=true or when connecting to a server that does not
 	// support the server watch stream. When the Watcher wakes up, it will
 	// check that the current server is still OK and then continue sleeping. If

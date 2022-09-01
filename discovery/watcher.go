@@ -402,7 +402,7 @@ func (w *Watcher) watchStream() (*addrSet, error) {
 	client := pbserverdiscovery.NewServerDiscoveryServiceClient(w.conn)
 	serverStream, err := client.WatchServers(w.ctx, &pbserverdiscovery.WatchServersRequest{})
 	if err != nil {
-		w.log.Error("opening server watch stream", "err", err)
+		w.log.Error("unable to open server watch stream", "error", err)
 		return nil, err
 	}
 
@@ -411,7 +411,7 @@ func (w *Watcher) watchStream() (*addrSet, error) {
 		// This blocks until there is a change from the server.
 		resp, err := serverStream.Recv()
 		if err != nil {
-			w.log.Error("unable to receive from server watch stream", "err", err)
+			w.log.Error("failed to parse server address from watch stream", "error", err)
 			return set, err
 		}
 
