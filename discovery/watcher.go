@@ -44,8 +44,16 @@ type InitState struct {
 type SubscribeState struct{}
 
 type Watcher struct {
+	// This is the "top-level" internal context. This is used to cancel the
+	// Watcher's Run method, including the gRPC connection.
 	ctx       context.Context
 	ctxCancel context.CancelFunc
+
+	// This is an internal sub-context used to cancel operations in order to
+	// switch servers.
+	ctxForSwitch    context.Context
+	cancelForSwitch context.CancelFunc
+	switchLock      sync.Mutex
 
 	config Config
 	log    hclog.Logger
@@ -56,10 +64,12 @@ type Watcher struct {
 	runComplete  *event
 	runOnce      sync.Once
 
-	backoff  backoff.BackOff
-	conn     *grpc.ClientConn
+	backoff backoff.BackOff
+	conn    *grpc.ClientConn
+	token   atomic.Value
+
 	resolver *watcherResolver
-	token    atomic.Value
+	balancer *watcherBalancer
 
 	// interface to inject custom server ports for tests
 	discoverer Discoverer
@@ -107,10 +117,13 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 	}
 	dialOpts := []grpc.DialOption{
 		grpc.WithTransportCredentials(cred),
-		grpc.WithResolvers(w.resolver), // note: experimental api.
 		grpc.WithUnaryInterceptor(makeUnaryInterceptor(w)),
 		grpc.WithStreamInterceptor(makeStreamInterceptor(w)),
-		// TODO: Add custom grpc balancer here.
+		// note: experimental apis
+		grpc.WithResolvers(w.resolver),
+		grpc.WithDefaultServiceConfig(
+			fmt.Sprintf(`{"loadBalancingPolicy": "%s"}`, registerBalancer(w, log)),
+		),
 	}
 
 	// Dial with "consul://" to trigger our custom resolver. We don't
@@ -215,6 +228,10 @@ func (w *Watcher) run() {
 func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
 	w.log.Debug("Watcher.nextServer", "addrs", addrs.String())
 
+	w.switchLock.Lock()
+	w.ctxForSwitch, w.cancelForSwitch = context.WithCancel(w.ctx)
+	w.switchLock.Unlock()
+
 	defer func() {
 		// If we return without picking a server, then clear the gRPC connection's
 		// address list. This prevents gRPC from retrying the connection to the server
@@ -256,6 +273,12 @@ func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
 			return addrs, err
 		}
 		w.currentServer.Store(server)
+
+		// Set init complete here. This indicates to Run() that initialization
+		// completed: we found a server, have a token, and fetched dataplane
+		// features. Make sure to set this _after_ the first time we set
+		// w.curentServer.
+		w.initComplete.SetDone()
 	}
 
 	current := w.currentServer.Load().(serverState)
@@ -323,10 +346,6 @@ func (w *Watcher) connect(addr Addr) (serverState, error) {
 		return serverState{}, err
 	}
 
-	// Set init complete here. This indicates to Run() that initialization
-	// we found a server, have a token, and fetched dataplane features.
-	w.initComplete.SetDone()
-
 	return serverState{addr: addr, dataplaneFeatures: features}, nil
 }
 
@@ -337,19 +356,50 @@ func (w *Watcher) connect(addr Addr) (serverState, error) {
 // since the actual address the conection is using is abstracted away.
 func (w *Watcher) switchServer(to Addr) error {
 	w.log.Debug("Watcher.switchServer", "to", to)
+	w.switchLock.Lock()
+	defer w.switchLock.Unlock()
+
 	err := w.resolver.SetAddress(to)
 	if err != nil {
 		return err
 	}
-	// TODO: This sleep will be replaced with a custom grpc loadbalancer that
-	// that looks at the state of underlying sub-connections.
-	time.Sleep(5 * time.Second)
-	return nil
+	return w.balancer.WaitForTransition(w.ctx, to)
+}
+
+// requestServerSwitch requests a switch to some other server.
+// This is safe to call from other goroutines. It does not block
+// to wait for the server switch.
+//
+// This works by canceling a context (w.ctxForSwitch) to abort certain types of
+// Watcher operations. This induces an error that causes the Watcher to mark
+// the server it's currently using "NotOK" (which is the same logic as for any
+// other type of error. This is kind of indirect, but also nice in that we don't
+// have to special case much here.
+//
+// Note that when a server is marked "NotOK", that status only persists until
+// the next time the Watcher refreshes server IPs (via either discover() or
+// watchStream()). If there is only one Consul server, or if the Watcher
+// currently has only one "OK" server, then we would mark it "NotOK", re-run
+// address discovery to get a fresh list of "OK" addresses, and then
+// potentially reconnect to that same server we just switched away from (at
+// random).
+func (w *Watcher) requestServerSwitch() {
+	w.log.Debug("Watcher.requestServerSwitch")
+	if !w.switchLock.TryLock() {
+		// switch currently in progress.
+		return
+	}
+	defer w.switchLock.Unlock()
+
+	// interrupt the Watcher.
+	if w.cancelForSwitch != nil {
+		w.cancelForSwitch()
+	}
 }
 
 func (w *Watcher) getDataplaneFeatures() (map[string]bool, error) {
 	client := pbdataplane.NewDataplaneServiceClient(w.conn)
-	resp, err := client.GetSupportedDataplaneFeatures(w.ctx, &pbdataplane.GetSupportedDataplaneFeaturesRequest{})
+	resp, err := client.GetSupportedDataplaneFeatures(w.ctxForSwitch, &pbdataplane.GetSupportedDataplaneFeaturesRequest{})
 	if err != nil {
 		return nil, fmt.Errorf("checking supported features: %w", err)
 	}
@@ -399,7 +449,7 @@ func (w *Watcher) watch() (*addrSet, error) {
 func (w *Watcher) watchStream() (*addrSet, error) {
 	w.log.Debug("Watcher.watchStream")
 	client := pbserverdiscovery.NewServerDiscoveryServiceClient(w.conn)
-	serverStream, err := client.WatchServers(w.ctx, &pbserverdiscovery.WatchServersRequest{})
+	serverStream, err := client.WatchServers(w.ctxForSwitch, &pbserverdiscovery.WatchServersRequest{})
 	if err != nil {
 		w.log.Error("unable to open server watch stream", "error", err)
 		return nil, err
@@ -410,17 +460,17 @@ func (w *Watcher) watchStream() (*addrSet, error) {
 		// This blocks until there is a change from the server.
 		resp, err := serverStream.Recv()
 		if err != nil {
-			w.log.Error("failed to parse server address from watch stream", "error", err)
+			w.log.Error("unable to receive from server watch stream", "error", err)
 			return set, err
 		}
 
 		// The set of servers from the stream is the best known set of servers to use.
-		set := newAddrSet()
+		set = newAddrSet()
 		for _, srv := range resp.Servers {
 			addr, err := w.nodeToAddrFn(srv.Id, srv.Address)
 			if err != nil {
-				// failed to parse address. ignore this server.
-				w.log.Warn(err.Error())
+				// ignore the server on failure.
+				w.log.Warn("failed to parse server address from watch stream", "error", err)
 				continue
 			}
 			set.Put(OK, addr)
@@ -435,8 +485,8 @@ func (w *Watcher) watchSleep() (*addrSet, error) {
 
 	for {
 		select {
-		case <-w.ctx.Done():
-			return nil, w.ctx.Err()
+		case <-w.ctxForSwitch.Done():
+			return nil, w.ctxForSwitch.Err()
 		case <-time.After(w.config.ServerWatchDisabledInterval):
 		}
 

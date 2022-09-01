@@ -93,7 +93,7 @@ func interceptError(watcher *Watcher, err error) {
 	}
 
 	if s.Code() == codes.ResourceExhausted {
-		// TODO: tell the watcher to switch servers when we see this error code.
 		watcher.log.Debug("saw gRPC ResourceExhausted status code")
+		watcher.requestServerSwitch()
 	}
 }

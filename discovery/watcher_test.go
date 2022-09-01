@@ -45,6 +45,22 @@ func TestRun(t *testing.T) {
 	}
 	for name, c := range cases {
 		c := c
+
+		ctx := context.Background()
+
+		// The gRPC balancer registry is global and not thread safe. gRPC starts goroutine(s)
+		// that read from the balancer registry when building balancers, and expects all writes
+		// to the registry to occur synchronously upfront in an init() function.
+		//
+		// To avoid the race detector in parallel tests, we must have all balancer.Register calls
+		// that write to the registry happen prior to starting any Watchers. This means we must
+		// construct all Watchers first, synchronously and before Watcher.Run called.
+		w, err := NewWatcher(ctx, c.config, hclog.New(&hclog.LoggerOptions{
+			Name:  fmt.Sprintf("watcher/%s", name),
+			Level: hclog.Debug,
+		}))
+		require.NoError(t, err)
+
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
@@ -53,14 +69,6 @@ func TestRun(t *testing.T) {
 			for _, srv := range servers {
 				serversByNodeId[srv.Config.NodeID] = srv
 			}
-
-			ctx := context.Background()
-			w, err := NewWatcher(ctx, c.config, hclog.New(&hclog.LoggerOptions{
-				Name:  fmt.Sprintf("watcher/%s", name),
-				Level: hclog.Debug,
-			}),
-			)
-			require.NoError(t, err)
 
 			// To test with local Consul servers, we inject custom server ports. The Config struct,
 			// go-netaddrs, and the server watch stream do not support per-server ports.
@@ -76,23 +84,24 @@ func TestRun(t *testing.T) {
 			go w.Run()
 			t.Cleanup(w.Stop)
 
-			// Get initial state. This blocks until initialization is complete.
-			state, err := w.State()
+			// Get initial initialState. This blocks until initialization is complete.
+			initialState, err := w.State()
 			require.NoError(t, err)
-			require.NotNil(t, state)
-			require.NotNil(t, state, state.GRPCConn)
+			require.NotNil(t, initialState)
+			require.NotNil(t, initialState, initialState.GRPCConn)
+			require.Contains(t, servers, initialState.Address.String())
 
 			// check the token we get back.
 			switch c.config.Credentials.Type {
 			case CredentialsTypeStatic:
-				require.Equal(t, state.Token, testServerManagementToken)
+				require.Equal(t, initialState.Token, testServerManagementToken)
 			case CredentialsTypeLogin:
 				require.FailNow(t, "TODO: support acl token login")
 			default:
-				require.Equal(t, state.Token, "")
+				require.Equal(t, initialState.Token, "")
 			}
 
-			unaryClient := pbdataplane.NewDataplaneServiceClient(state.GRPCConn)
+			unaryClient := pbdataplane.NewDataplaneServiceClient(initialState.GRPCConn)
 			unaryRequest := func(t require.TestingT) {
 				req := &pbdataplane.GetSupportedDataplaneFeaturesRequest{}
 				resp, err := unaryClient.GetSupportedDataplaneFeatures(ctx, req)
@@ -100,7 +109,7 @@ func TestRun(t *testing.T) {
 				require.NotNil(t, resp)
 			}
 
-			streamClient := pbserverdiscovery.NewServerDiscoveryServiceClient(state.GRPCConn)
+			streamClient := pbserverdiscovery.NewServerDiscoveryServiceClient(initialState.GRPCConn)
 			streamRequest := func(t require.TestingT) {
 				// It seems like the stream will not automatically switch servers via the resolver.
 				// It gets an address once when the stream is created.
@@ -115,10 +124,11 @@ func TestRun(t *testing.T) {
 			unaryRequest(t)
 			streamRequest(t)
 
-			// Stop the current server. The Watcher should switch servers.
-			currentServer, ok := servers[state.Address.String()]
+			currentServer, ok := servers[initialState.Address.String()]
 			require.True(t, ok)
-			t.Logf("stop server: %s", state.Address.String())
+
+			// Stop the current server. The Watcher should switch servers.
+			t.Logf("stop server: %s", initialState.Address.String())
 			err = currentServer.Stop()
 			if err != nil {
 				// this seems to to just be "exit code 1"
@@ -131,9 +141,25 @@ func TestRun(t *testing.T) {
 				streamRequest(r)
 			})
 
-			newState, err := w.State()
+			stateAfterStop, err := w.State()
 			require.NoError(t, err)
-			require.NotEqual(t, newState.Address, state.Address)
+			require.NotEqual(t, stateAfterStop.Address, initialState.Address)
+
+			// Tell the Watcher to switch servers.
+			w.requestServerSwitch()
+
+			// Wait for requests to eventually succeed after the Watcher switches servers.
+			retry.RunWith(retryTimeout(5*time.Second), t, func(r *retry.R) {
+				unaryRequest(r)
+				streamRequest(r)
+			})
+
+			// TODO: Replace retries with a channel wait after we implement Subscribe
+			retry.RunWith(retryTimeout(5*time.Second), t, func(r *retry.R) {
+				stateAfterSwitch, err := w.State()
+				require.NoError(r, err)
+				require.NotEqual(r, stateAfterSwitch.Address, stateAfterStop.Address)
+			})
 
 			t.Logf("test successful")
 		})
