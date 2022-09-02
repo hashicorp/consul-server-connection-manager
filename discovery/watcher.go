@@ -17,8 +17,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// InitState is the info a caller wants to know after initialization.
-type InitState struct {
+// State is the info a caller wants to know after initialization.
+type State struct {
 	// GRPCConn is the gRPC connection shared with this library. Use
 	// this to create your gRPC clients. The gRPC connection is
 	// automatically updated to switch to a new server, so you can
@@ -38,11 +38,6 @@ type InitState struct {
 	// current Consul server.
 	DataplaneFeatures map[string]bool
 }
-
-// SubscribeState is the info callers need to know when the Watcher's
-// current server changes.
-// TODO: Fill this in.
-type SubscribeState struct{}
 
 type Watcher struct {
 	// This is the "top-level" internal context. This is used to cancel the
@@ -139,7 +134,7 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 	return w, nil
 }
 
-func (w *Watcher) Subscribe() chan SubscribeState {
+func (w *Watcher) Subscribe() chan State {
 	// TODO: add this
 	panic("unimplemented")
 }
@@ -162,19 +157,22 @@ func (w *Watcher) Run() {
 //
 // Run must be called or State will never return. State can be aborted by
 // cancelling the context passed to NewWatcher or by calling Stop.
-func (w *Watcher) State() (*InitState, error) {
+func (w *Watcher) State() (State, error) {
 	err := w.initComplete.Wait(w.ctx)
 	if err != nil {
-		return nil, err
+		return State{}, err
 	}
+	return w.currentState(), nil
+}
 
+func (w *Watcher) currentState() State {
 	current := w.currentServer.Load().(serverState)
-	return &InitState{
+	return State{
 		GRPCConn:          w.conn,
 		Token:             w.token.Load().(string),
 		Address:           current.addr,
 		DataplaneFeatures: current.dataplaneFeatures,
-	}, nil
+	}
 }
 
 // Stop stops the Watcher after Run is called.
@@ -247,7 +245,6 @@ func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
 
 	// Choose a server from the known "healthy" servers.
 	// If none are healthy, re-run address discovery.
-	// TODO: supporting filtering servers (by dataplane features)
 	w.currentServer.Store(serverState{})
 
 	var healthy []Addr
@@ -275,17 +272,26 @@ func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
 		}
 		w.currentServer.Store(server)
 
-		// Set init complete here. This indicates to Run() that initialization
-		// completed: we found a server, have a token, and fetched dataplane
-		// features. Make sure to set this _after_ the first time we set
-		// w.curentServer.
-		w.initComplete.SetDone()
 	}
 
 	current := w.currentServer.Load().(serverState)
 	if current.addr.Empty() {
 		return addrs, fmt.Errorf("unable to connect to a server")
 	}
+
+	if eval := w.config.ServerEvalFn; eval != nil {
+		state := w.currentState()
+		if !eval(state) {
+			addrs.Put(NotOK, state.Address)
+			w.currentServer.Store(serverState{})
+			return addrs, fmt.Errorf("ServerEvalFn returned false for server: %q", state.Address.String())
+		}
+	}
+
+	// Set init complete here. This indicates to Run() that initialization
+	// completed: we found a server, have a token (if any), fetched dataplane
+	// features, and the ServerEvalFn (if any) did not reject the server.
+	w.initComplete.SetDone()
 
 	w.log.Debug("connected to server", "addr", current.addr)
 	// TODO: if the current server changed, notify subscribers at this point.

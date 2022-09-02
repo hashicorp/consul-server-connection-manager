@@ -38,6 +38,19 @@ type Config struct {
 	// This defaults to 1 minute.
 	ServerWatchDisabledInterval time.Duration
 
+	// ServerEvalFn is optional. It can be used to exclude servers based on
+	// custom criteria. If not nil, it is called after connecting to a server
+	// but prior to marking the server "current". When this returns false,
+	// the Watcher will skip the server.
+	//
+	// The State will be valid: The GRPCConn will be valid to use and
+	// DataplaneFeatures will be populated and the Address and Token (if
+	// applicable) will be set.
+	//
+	// This is called synchronously in the same goroutine as Watcher.Run(),
+	// so it should not block, or at least not for too long.
+	ServerEvalFn func(State) bool
+
 	// TLS contains the TLS settings to use for the gRPC connections to the
 	// Consul servers. By default this is nil, indicating that TLS is disabled.
 	//
