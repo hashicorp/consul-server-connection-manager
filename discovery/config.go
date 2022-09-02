@@ -100,16 +100,16 @@ type StaticTokenCredential struct {
 }
 
 type LoginCredential struct {
-	// Method is the name of the Consul auth method.
-	Method string
+	// AuthMethod is the name of the Consul auth method.
+	AuthMethod string
 	// Namespace is the namespace containing the auth method.
 	Namespace string
 	// Partition is the partition containing the auth method.
 	Partition string
 	// Datacenter is the datacenter containing the auth method.
 	Datacenter string
-	// Bearer is the bearer token presented to the auth method.
-	Bearer string
+	// BearerToken is the bearer token presented to the auth method.
+	BearerToken string
 	// Meta is the arbitrary set of key-value pairs to attach to the
 	// token. These are included in the Description field of the token.
 	Meta map[string]string

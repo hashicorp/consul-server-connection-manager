@@ -38,6 +38,18 @@ func TestRun(t *testing.T) {
 			},
 			serverConfigFn: enableACLsConfigFn,
 		},
+		"auth method login": {
+			config: Config{
+				Credentials: Credentials{
+					Type: CredentialsTypeLogin,
+					// We mock the login/logout calls.
+					Login: LoginCredential{
+						AuthMethod:  "kubernetes",
+						BearerToken: "fake-token",
+					},
+				},
+			},
+		},
 		"server watch disabled": {
 			config: Config{
 				ServerWatchDisabled:         true,
@@ -84,6 +96,7 @@ func TestRun(t *testing.T) {
 			// go-netaddrs, and the server watch stream do not support per-server ports.
 			w.discoverer = servers
 			w.nodeToAddrFn = servers.nodeToAddrFn
+			w.acls = &fakeACLs{}
 
 			// Start the Watcher.
 			subscribeChan := w.Subscribe()
@@ -102,13 +115,10 @@ func TestRun(t *testing.T) {
 			// Check we can also get state this way.
 			require.Equal(t, initialState, receiveSubscribeState(t, ctx, subscribeChan))
 
-			// check the token we get back.
-			switch c.config.Credentials.Type {
-			case CredentialsTypeStatic:
+			// Check the token we get back.
+			if c.config.Credentials.Type != "" {
 				require.Equal(t, initialState.Token, testServerManagementToken)
-			case CredentialsTypeLogin:
-				require.FailNow(t, "TODO: support acl token login")
-			default:
+			} else {
 				require.Equal(t, initialState.Token, "")
 			}
 
@@ -274,4 +284,18 @@ func enableACLsConfigFn(c *testutil.TestServerConfig) {
 	c.ACL.Enabled = true
 	c.ACL.Tokens.InitialManagement = testServerManagementToken
 	c.ACL.DefaultPolicy = "deny"
+}
+
+type fakeACLs struct{}
+
+var _ ACLs = (*fakeACLs)(nil)
+
+// Login implements ACLs
+func (*fakeACLs) Login(context.Context) (string, error) {
+	return testServerManagementToken, nil
+}
+
+// Logout implements ACLs
+func (*fakeACLs) Logout(context.Context) error {
+	return nil
 }
