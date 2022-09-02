@@ -2,7 +2,6 @@ package discovery
 
 import (
 	"crypto/tls"
-	"net"
 	"strings"
 	"time"
 )
@@ -42,9 +41,9 @@ type Config struct {
 	// TLS contains the TLS settings to use for the gRPC connections to the
 	// Consul servers. By default this is nil, indicating that TLS is disabled.
 	//
-	// The ServerName field is automatically set if Addresses contains
-	// a DNS hostname. The ServerName field is only set if TLS and TLS
-	// verification are enabled and the ServerName field is empty.
+	// If unset, the ServerName field is automatically set if Addresses
+	// contains a DNS hostname. The ServerName field is only set if TLS and TLS
+	// verification are enabled.
 	TLS         *tls.Config
 	Credentials Credentials
 }
@@ -55,22 +54,12 @@ func (c Config) withDefaults() Config {
 	}
 
 	// Infer the ServerName field if a hostname is used in Addresses.
-	if c.TLS != nil && !c.TLS.InsecureSkipVerify && c.TLS.ServerName == "" && isPotentialHostname(c.Addresses) {
+	if c.TLS != nil && !c.TLS.InsecureSkipVerify && c.TLS.ServerName == "" && !strings.HasPrefix(c.Addresses, "exec=") {
 		c.TLS = c.TLS.Clone()
 		c.TLS.ServerName = c.Addresses
 	}
 
 	return c
-}
-
-// isPotentialHostname returns true if the addr is not an IP or "exec=" string,
-// and true otherwise. It may return true for something that is not actually a
-// valid hostname.
-func isPotentialHostname(addr string) bool {
-	if addr == "" || strings.HasPrefix(addr, "exec=") {
-		return false
-	}
-	return net.ParseIP(addr) == nil
 }
 
 type Credentials struct {

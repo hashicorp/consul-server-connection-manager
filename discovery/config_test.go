@@ -38,7 +38,7 @@ func TestConfigDefaults(t *testing.T) {
 				},
 			},
 		},
-		"do not infer tls server name when address is ip": {
+		"infer tls server name when address is ip": {
 			cfg: Config{
 				Addresses: "1.2.3.4",
 				TLS:       &tls.Config{},
@@ -46,7 +46,9 @@ func TestConfigDefaults(t *testing.T) {
 			expCfg: Config{
 				Addresses:                   "1.2.3.4",
 				ServerWatchDisabledInterval: DefaultServerWatchDisabledInterval,
-				TLS:                         &tls.Config{},
+				TLS: &tls.Config{
+					ServerName: "1.2.3.4",
+				},
 			},
 		},
 		"do not infer tls server name when address is exec command": {
@@ -98,31 +100,5 @@ func TestConfigDefaults(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			require.Equal(t, c.expCfg, c.cfg.withDefaults())
 		})
-	}
-}
-
-func TestIsPotentialHostname(t *testing.T) {
-	// non-hostnames
-	for _, addr := range []string{
-		"",
-		"exec=",
-		"exec=1.2.3.4",
-		"1.2.3.4",
-		"::1",
-		"0:0:0:0:0:0:0:1",
-	} {
-		require.False(t, isPotentialHostname(addr), "addr=%q", addr)
-	}
-
-	// valid hostnames
-	for _, addr := range []string{
-		"exec", // no trailing '='. this could be a hostname.
-		"a",
-		"a.b",
-		"abc.tld",
-		"1.2.3.tld",
-		"1.2.3.4.tld",
-	} {
-		require.True(t, isPotentialHostname(addr), "addr=%q", addr)
 	}
 }
