@@ -2,6 +2,8 @@ package discovery
 
 import (
 	"crypto/tls"
+	"net"
+	"strings"
 	"time"
 )
 
@@ -37,8 +39,12 @@ type Config struct {
 	// This defaults to 1 minute.
 	ServerWatchDisabledInterval time.Duration
 
-	// TLS is the TLS settings to use for the gRPC connections to the Consul
-	// servers.
+	// TLS contains the TLS settings to use for the gRPC connections to the
+	// Consul servers. By default this is nil, indicating that TLS is disabled.
+	//
+	// The ServerName field is automatically set if Addresses contains
+	// a DNS hostname. The ServerName field is only set if TLS and TLS
+	// verification are enabled and the ServerName field is empty.
 	TLS         *tls.Config
 	Credentials Credentials
 }
@@ -47,7 +53,24 @@ func (c Config) withDefaults() Config {
 	if c.ServerWatchDisabledInterval == 0 {
 		c.ServerWatchDisabledInterval = DefaultServerWatchDisabledInterval
 	}
+
+	// Infer the ServerName field if a hostname is used in Addresses.
+	if c.TLS != nil && !c.TLS.InsecureSkipVerify && c.TLS.ServerName == "" && isPotentialHostname(c.Addresses) {
+		c.TLS = c.TLS.Clone()
+		c.TLS.ServerName = c.Addresses
+	}
+
 	return c
+}
+
+// isPotentialHostname returns true if the addr is not an IP or "exec=" string,
+// and true otherwise. It may return true for something that is not actually a
+// valid hostname.
+func isPotentialHostname(addr string) bool {
+	if addr == "" || strings.HasPrefix(addr, "exec=") {
+		return false
+	}
+	return net.ParseIP(addr) == nil
 }
 
 type Credentials struct {
