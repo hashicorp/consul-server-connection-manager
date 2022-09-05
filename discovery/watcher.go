@@ -24,7 +24,7 @@ type InitState struct {
 	// automatically updated to switch to a new server, so you can
 	// use this connection for the lifetime of the associated
 	// Watcher.
-	GRPCConn grpc.ClientConnInterface
+	GRPCConn *grpc.ClientConn
 
 	// Token is the ACL token obtain from logging in (if applicable).
 	// If login is not supported this will be set to the static token
