@@ -13,7 +13,6 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/hashicorp/consul-server-connection-manager/internal/consul-proto/pbdataplane"
 	"github.com/hashicorp/consul-server-connection-manager/internal/consul-proto/pbserverdiscovery"
 )
 
@@ -349,8 +348,8 @@ func (w *Watcher) switchServer(to Addr) error {
 }
 
 func (w *Watcher) getDataplaneFeatures() (map[string]bool, error) {
-	client := pbdataplane.NewDataplaneServiceClient(w.conn)
-	resp, err := client.GetSupportedDataplaneFeatures(w.ctx, &pbdataplane.GetSupportedDataplaneFeaturesRequest{})
+	client := pbserverdiscovery.NewServerDiscoveryServiceClient(w.conn)
+	resp, err := client.GetSupportedDataplaneFeatures(w.ctx, &pbserverdiscovery.GetSupportedDataplaneFeaturesRequest{})
 	if err != nil {
 		return nil, fmt.Errorf("checking supported features: %w", err)
 	}
@@ -359,7 +358,7 @@ func (w *Watcher) getDataplaneFeatures() (map[string]bool, error) {
 	// types back to users.
 	features := map[string]bool{}
 	for _, feat := range resp.SupportedDataplaneFeatures {
-		nameStr := pbdataplane.DataplaneFeatures_name[int32(feat.FeatureName)]
+		nameStr := pbserverdiscovery.DataplaneFeatures_name[int32(feat.FeatureName)]
 		supported := feat.GetSupported()
 		w.log.Debug("feature", "supported", supported, "name", nameStr)
 		features[nameStr] = supported

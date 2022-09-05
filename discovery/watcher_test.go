@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hashicorp/consul-server-connection-manager/internal/consul-proto/pbdataplane"
+	"github.com/hashicorp/go-hclog"
+	"github.com/stretchr/testify/require"
+
 	"github.com/hashicorp/consul-server-connection-manager/internal/consul-proto/pbserverdiscovery"
 	"github.com/hashicorp/consul/sdk/testutil"
 	"github.com/hashicorp/consul/sdk/testutil/retry"
-	"github.com/hashicorp/go-hclog"
-	"github.com/stretchr/testify/require"
 )
 
 const testServerManagementToken = "12345678-90ab-cdef-0000-123456789abcd"
@@ -92,19 +92,19 @@ func TestRun(t *testing.T) {
 				require.Equal(t, state.Token, "")
 			}
 
-			unaryClient := pbdataplane.NewDataplaneServiceClient(state.GRPCConn)
+			client := pbserverdiscovery.NewServerDiscoveryServiceClient(state.GRPCConn)
+
 			unaryRequest := func(t require.TestingT) {
-				req := &pbdataplane.GetSupportedDataplaneFeaturesRequest{}
-				resp, err := unaryClient.GetSupportedDataplaneFeatures(ctx, req)
+				req := &pbserverdiscovery.GetSupportedDataplaneFeaturesRequest{}
+				resp, err := client.GetSupportedDataplaneFeatures(ctx, req)
 				require.NoError(t, err, "error from unary request")
 				require.NotNil(t, resp)
 			}
 
-			streamClient := pbserverdiscovery.NewServerDiscoveryServiceClient(state.GRPCConn)
 			streamRequest := func(t require.TestingT) {
 				// It seems like the stream will not automatically switch servers via the resolver.
 				// It gets an address once when the stream is created.
-				stream, err := streamClient.WatchServers(ctx, &pbserverdiscovery.WatchServersRequest{})
+				stream, err := client.WatchServers(ctx, &pbserverdiscovery.WatchServersRequest{})
 				require.NoError(t, err, "opening stream")
 				_, err = stream.Recv()
 				require.NoError(t, err, "error from stream")
