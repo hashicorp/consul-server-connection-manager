@@ -4,12 +4,12 @@ go 1.18
 
 require (
 	github.com/cenkalti/backoff/v4 v4.1.3
+	github.com/hashicorp/consul/proto-public v0.1.0
 	github.com/hashicorp/consul/sdk v0.11.0
 	github.com/hashicorp/go-hclog v1.2.2
 	github.com/hashicorp/go-netaddrs v0.0.0-20220509001840-90ed9d26ec46
 	github.com/stretchr/testify v1.7.2
 	google.golang.org/grpc v1.48.0
-	google.golang.org/protobuf v1.28.1
 )
 
 require (
@@ -29,5 +29,6 @@ require (
 	golang.org/x/sys v0.0.0-20220503163025-988cb79eb6c6 // indirect
 	golang.org/x/text v0.3.6 // indirect
 	google.golang.org/genproto v0.0.0-20200526211855-cb27e3aa2013 // indirect
+	google.golang.org/protobuf v1.28.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

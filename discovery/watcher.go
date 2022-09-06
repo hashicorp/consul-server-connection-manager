@@ -8,13 +8,12 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	"github.com/hashicorp/consul/proto-public/pbdataplane"
+	"github.com/hashicorp/consul/proto-public/pbserverdiscovery"
 	"github.com/hashicorp/go-hclog"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
-
-	"github.com/hashicorp/consul-server-connection-manager/internal/consul-proto/pbdataplane"
-	"github.com/hashicorp/consul-server-connection-manager/internal/consul-proto/pbserverdiscovery"
 )
 
 // InitState is the info a caller wants to know after initialization.
