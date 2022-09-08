@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hashicorp/consul-server-connection-manager/internal/consul-proto/pbdataplane"
-	"github.com/hashicorp/consul-server-connection-manager/internal/consul-proto/pbserverdiscovery"
+	"github.com/hashicorp/consul/proto-public/pbdataplane"
+	"github.com/hashicorp/consul/proto-public/pbserverdiscovery"
 	"github.com/hashicorp/consul/sdk/testutil"
 	"github.com/hashicorp/consul/sdk/testutil/retry"
 	"github.com/hashicorp/go-hclog"
