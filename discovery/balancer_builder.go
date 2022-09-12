@@ -1,7 +1,9 @@
 package discovery
 
 import (
-	"github.com/google/uuid"
+	"crypto/rand"
+	"encoding/hex"
+
 	"github.com/hashicorp/go-hclog"
 	"google.golang.org/grpc/balancer"
 	"google.golang.org/grpc/balancer/base"
@@ -28,7 +30,7 @@ func registerBalancer(w *Watcher, log hclog.Logger) string {
 	b := &balancerBuilder{
 		watcher:        w,
 		log:            log,
-		hackPolicyName: uuid.New().String(),
+		hackPolicyName: randomString(),
 	}
 	balancer.Register(b)
 	return b.hackPolicyName
@@ -57,4 +59,13 @@ func (b *balancerBuilder) Build(cc balancer.ClientConn, opt balancer.BuildOption
 	b.watcher.balancer = blr
 	return b.watcher.balancer
 
+}
+
+// randomString returns a 32-byte hex-encoded string.
+func randomString() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic("failed to generate random bytes")
+	}
+	return hex.EncodeToString(b)
 }

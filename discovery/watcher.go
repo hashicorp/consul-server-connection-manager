@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -366,15 +367,14 @@ func (w *Watcher) switchServer(to Addr) error {
 	return w.balancer.WaitForTransition(w.ctx, to)
 }
 
-// requestServerSwitch requests a switch to some other server.
-// This is safe to call from other goroutines. It does not block
-// to wait for the server switch.
+// requestServerSwitch requests a switch to some other server. This is safe to
+// call from other goroutines. It does not block to wait for the server switch.
 //
 // This works by canceling a context (w.ctxForSwitch) to abort certain types of
 // Watcher operations. This induces an error that causes the Watcher to mark
-// the server it's currently using "NotOK" (which is the same logic as for any
-// other type of error. This is kind of indirect, but also nice in that we don't
-// have to special case much here.
+// the server it's currently using "NotOK", which is  the same logic as for any
+// other type of error. This is kind of indirect, but also nice in that we
+// don't have to special case much here.
 //
 // Note that when a server is marked "NotOK", that status only persists until
 // the next time the Watcher refreshes server IPs (via either discover() or
@@ -460,9 +460,9 @@ func (w *Watcher) watchStream() (*addrSet, error) {
 		// This blocks until there is a change from the server.
 		resp, err := serverStream.Recv()
 		if err != nil {
-		if !errors.Is(err, context.Canceled) {
-			w.log.Error("unable to receive from server watch stream", "error", err)
-		}
+			if !errors.Is(err, context.Canceled) {
+				w.log.Error("unable to receive from server watch stream", "error", err)
+			}
 			return set, err
 		}
 

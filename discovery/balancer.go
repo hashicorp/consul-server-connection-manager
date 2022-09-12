@@ -63,25 +63,35 @@ type clientConnWrapper struct {
 func (c *clientConnWrapper) NewSubConn(addrs []resolver.Address, opts balancer.NewSubConnOptions) (balancer.SubConn, error) {
 	c.log.Debug("clientConnWrapper.NewSubConn", "addrs", addrs)
 
+	if len(addrs) > 1 {
+		// We expect only one address per subconnection, which should always be
+		// the case for us (no nested resolver / balancer setup).
+		c.log.Error("received multiple addresses for gRPC sub-connection")
+		return nil, fmt.Errorf("invalid use of gRPC balancer; expected only one address for gRPC sub-connection")
+	}
+
 	sc, err := c.ClientConn.NewSubConn(addrs, opts)
 
-	// Store the address for this sub-connection.
 	if err == nil && len(addrs) == 1 {
+		// Store the address for this sub-connection.
 		c.balancer.lock.Lock()
 		defer c.balancer.lock.Unlock()
 		c.balancer.scs[sc] = &subConnState{addr: addrs[0]}
-	} else if len(addrs) > 1 {
-		// We expect only one address per subconnection, which should always be
-		// the case for us (no nested resolver / balancer setup).
-		c.log.Warn("received multiple addresses for gRPC sub-connection")
 	}
-
 	return sc, err
 }
 
 // UpdateAddresses is called by the base Balancer when the sub connection address changes.
 func (c *clientConnWrapper) UpdateAddresses(sc balancer.SubConn, addrs []resolver.Address) {
 	c.log.Debug("clientConnWrapper.UpdateAddresses", "sub-conn", sc, "addrs", addrs)
+
+	if len(addrs) > 1 {
+		// We expect only one address per subconnection, which should always be
+		// the case for us (no nested resolver / balancer setup).
+		c.log.Error("received multiple addresses for gRPC sub-connection")
+		return
+	}
+
 	c.ClientConn.UpdateAddresses(sc, addrs)
 
 	// Update the address for this sub-connection.
@@ -93,10 +103,6 @@ func (c *clientConnWrapper) UpdateAddresses(sc balancer.SubConn, addrs []resolve
 			c.balancer.scs[sc] = &subConnState{}
 		}
 		c.balancer.scs[sc].addr = addrs[0]
-	} else if len(addrs) > 1 {
-		// We expect only one address per subconnection, which should always be
-		// the case for us (no nested resolver / balancer setup).
-		c.log.Warn("received multiple addresses for gRPC sub-connection")
 	}
 }
 
