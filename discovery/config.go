@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"crypto/tls"
+	"strings"
 	"time"
 )
 
@@ -37,8 +38,12 @@ type Config struct {
 	// This defaults to 1 minute.
 	ServerWatchDisabledInterval time.Duration
 
-	// TLS is the TLS settings to use for the gRPC connections to the Consul
-	// servers.
+	// TLS contains the TLS settings to use for the gRPC connections to the
+	// Consul servers. By default this is nil, indicating that TLS is disabled.
+	//
+	// If unset, the ServerName field is automatically set if Addresses
+	// contains a DNS hostname. The ServerName field is only set if TLS and TLS
+	// verification are enabled.
 	TLS         *tls.Config
 	Credentials Credentials
 }
@@ -47,6 +52,13 @@ func (c Config) withDefaults() Config {
 	if c.ServerWatchDisabledInterval == 0 {
 		c.ServerWatchDisabledInterval = DefaultServerWatchDisabledInterval
 	}
+
+	// Infer the ServerName field if a hostname is used in Addresses.
+	if c.TLS != nil && !c.TLS.InsecureSkipVerify && c.TLS.ServerName == "" && !strings.HasPrefix(c.Addresses, "exec=") {
+		c.TLS = c.TLS.Clone()
+		c.TLS.ServerName = c.Addresses
+	}
+
 	return c
 }
 
