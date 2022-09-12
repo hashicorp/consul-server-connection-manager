@@ -460,7 +460,9 @@ func (w *Watcher) watchStream() (*addrSet, error) {
 		// This blocks until there is a change from the server.
 		resp, err := serverStream.Recv()
 		if err != nil {
+		if !errors.Is(err, context.Canceled) {
 			w.log.Error("unable to receive from server watch stream", "error", err)
+		}
 			return set, err
 		}
 
