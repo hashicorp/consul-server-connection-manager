@@ -19,11 +19,13 @@ const testServerManagementToken = "12345678-90ab-cdef-0000-123456789abcd"
 // TestRun starts a Consul server cluster and starts a Watcher.
 func TestRun(t *testing.T) {
 	cases := map[string]struct {
-		config         Config
-		serverConfigFn testutil.ServerConfigCallback
+		config               Config
+		serverConfigFn       testutil.ServerConfigCallback
+		testWithServerEvalFn bool
 	}{
 		"no acls": {
-			config: Config{},
+			config:               Config{},
+			testWithServerEvalFn: true,
 		},
 		"static token": {
 			config: Config{
@@ -41,12 +43,24 @@ func TestRun(t *testing.T) {
 				ServerWatchDisabled:         true,
 				ServerWatchDisabledInterval: 1 * time.Second,
 			},
+			testWithServerEvalFn: true,
 		},
 	}
 	for name, c := range cases {
 		c := c
 
 		ctx := context.Background()
+
+		wasServerEvalFnCalled := false
+		if c.testWithServerEvalFn {
+			c.config.ServerEvalFn = func(state State) bool {
+				require.NotNil(t, state.GRPCConn)
+				require.NotEmpty(t, state.Address.String())
+				require.NotEmpty(t, state.DataplaneFeatures)
+				wasServerEvalFnCalled = true
+				return true
+			}
+		}
 
 		// The gRPC balancer registry is global and not thread safe. gRPC starts goroutine(s)
 		// that read from the balancer registry when building balancers, and expects all writes
@@ -60,7 +74,6 @@ func TestRun(t *testing.T) {
 			Level: hclog.Debug,
 		}))
 		require.NoError(t, err)
-
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
@@ -79,7 +92,6 @@ func TestRun(t *testing.T) {
 				}
 				return Addr{}, fmt.Errorf("no test server with node id %q", nodeID)
 			}
-
 			// Start the Watcher.
 			go w.Run()
 			t.Cleanup(w.Stop)
@@ -87,9 +99,11 @@ func TestRun(t *testing.T) {
 			// Get initial initialState. This blocks until initialization is complete.
 			initialState, err := w.State()
 			require.NoError(t, err)
-			require.NotNil(t, initialState)
 			require.NotNil(t, initialState, initialState.GRPCConn)
 			require.Contains(t, servers, initialState.Address.String())
+
+			// Make sure the ServerEvalFn is called (or not).
+			require.Equal(t, c.testWithServerEvalFn, wasServerEvalFnCalled)
 
 			// check the token we get back.
 			switch c.config.Credentials.Type {
@@ -201,6 +215,7 @@ func consulServers(t *testing.T, n int, cb testutil.ServerConfigCallback) (map[s
 				addr := fmt.Sprintf("%s:%d", srv.Config.Bind, srv.Config.Ports.SerfLan)
 				c.RetryJoin = append(c.RetryJoin, addr)
 			}
+			c.LogLevel = "warn"
 			if cb != nil {
 				cb(c)
 			}

@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+type ServerEvalFn func(State) bool
+
 type CredentialsType string
 
 const (
@@ -37,6 +39,22 @@ type Config struct {
 	//
 	// This defaults to 1 minute.
 	ServerWatchDisabledInterval time.Duration
+
+	// ServerEvalFn is optional. It can be used to exclude servers based on
+	// custom criteria. If not nil, it is called after connecting to a server
+	// but prior to marking the server "current". When this returns false,
+	// the Watcher will skip the server.
+	//
+	// The State passed to this function will be valid. The GRPCConn will be
+	// valid to use and DataplaneFeatures will be populated and the Address
+	// and Token (if applicable) will be set.
+	//
+	// This is called synchronously in the same goroutine as Watcher.Run(),
+	// so it should not block, or at least not for too long.
+	//
+	// To filter dataplane features, you can use the SupportsDataplaneFeatures
+	// helper, `cfg.ServerEvalFn = SupportsDataplaneFeatures("<feature-name>")`.
+	ServerEvalFn ServerEvalFn
 
 	// TLS contains the TLS settings to use for the gRPC connections to the
 	// Consul servers. By default this is nil, indicating that TLS is disabled.
@@ -95,4 +113,25 @@ type LoginCredential struct {
 	// Meta is the arbitrary set of key-value pairs to attach to the
 	// token. These are included in the Description field of the token.
 	Meta map[string]string
+}
+
+// SupportsDataplaneFeatures returns a ServerEvalFn that selects Consul servers
+// that support a list of given dataplane features.
+//
+// The following are dataplane feature name strings:
+//
+//	"DATAPLANE_FEATURES_WATCH_SERVERS"
+//	"DATAPLANE_FEATURES_EDGE_CERTIFICATE_MANAGEMENT"
+//	"DATAPLANE_FEATURES_ENVOY_BOOTSTRAP_CONFIGURATION"
+//
+// See the hashicorp/consul/proto-public package for a up-to-date list.
+func SupportsDataplaneFeatures(names ...string) ServerEvalFn {
+	return func(s State) bool {
+		for _, name := range names {
+			if !s.DataplaneFeatures[name] {
+				return false
+			}
+		}
+		return true
+	}
 }

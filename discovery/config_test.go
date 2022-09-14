@@ -102,3 +102,39 @@ func TestConfigDefaults(t *testing.T) {
 		})
 	}
 }
+
+func TestSupportsDataplaneFeatures(t *testing.T) {
+	matchNone := SupportsDataplaneFeatures()
+	match1And2 := SupportsDataplaneFeatures("feat1", "feat2")
+
+	// No supported features.
+	{
+		state := State{}
+		require.True(t, matchNone(state))
+		require.False(t, match1And2(state))
+	}
+
+	// feat2 not supported.
+	{
+		state := State{
+			DataplaneFeatures: map[string]bool{
+				"feat1": true,
+				"feat2": false,
+			},
+		}
+		require.True(t, matchNone(state))
+		require.False(t, match1And2(state))
+	}
+
+	// Both feat1 and feat2 supported.
+	{
+		state := State{
+			DataplaneFeatures: map[string]bool{
+				"feat1": true,
+				"feat2": true,
+			},
+		}
+		require.True(t, matchNone(state))
+		require.True(t, match1And2(state))
+	}
+}
