@@ -71,6 +71,8 @@ type Watcher struct {
 	discoverer Discoverer
 	// function to inject custom server ports for tests
 	nodeToAddrFn func(nodeID, addr string) (Addr, error)
+
+	subcribers []chan State
 }
 
 type serverState struct {
@@ -134,9 +136,22 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 	return w, nil
 }
 
-func (w *Watcher) Subscribe() chan State {
-	// TODO: add this
-	panic("unimplemented")
+func (w *Watcher) Subscribe() <-chan State {
+	ch := make(chan State, 1)
+	w.subcribers = append(w.subcribers, ch)
+	return ch
+}
+
+func (w *Watcher) notifySubscribers() {
+	state := w.currentState()
+	for _, ch := range w.subcribers {
+		select {
+		case ch <- state:
+			// success
+		default:
+			// could not send; updated dropped!
+		}
+	}
 }
 
 // Run watches for Consul server set changes forever. Run should be called in a
@@ -271,7 +286,6 @@ func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
 			return addrs, err
 		}
 		w.currentServer.Store(server)
-
 	}
 
 	current := w.currentServer.Load().(serverState)
@@ -288,13 +302,14 @@ func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
 		}
 	}
 
+	w.log.Debug("connected to server", "addr", current.addr)
+
 	// Set init complete here. This indicates to Run() that initialization
 	// completed: we found a server, have a token (if any), fetched dataplane
 	// features, and the ServerEvalFn (if any) did not reject the server.
 	w.initComplete.SetDone()
 
-	w.log.Debug("connected to server", "addr", current.addr)
-	// TODO: if the current server changed, notify subscribers at this point.
+	w.notifySubscribers()
 
 	newAddrs, err := w.watch()
 	if newAddrs != nil {

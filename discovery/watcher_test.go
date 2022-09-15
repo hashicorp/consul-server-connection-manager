@@ -3,18 +3,18 @@ package discovery
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/consul/proto-public/pbdataplane"
 	"github.com/hashicorp/consul/proto-public/pbserverdiscovery"
 	"github.com/hashicorp/consul/sdk/testutil"
-	"github.com/hashicorp/consul/sdk/testutil/retry"
 	"github.com/hashicorp/go-hclog"
 	"github.com/stretchr/testify/require"
 )
 
-const testServerManagementToken = "12345678-90ab-cdef-0000-123456789abcd"
+const testServerManagementToken = "12345678-90ab-cdef-0000-12345678abcd"
 
 // TestRun starts a Consul server cluster and starts a Watcher.
 func TestRun(t *testing.T) {
@@ -49,7 +49,8 @@ func TestRun(t *testing.T) {
 	for name, c := range cases {
 		c := c
 
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		t.Cleanup(cancel)
 
 		wasServerEvalFnCalled := false
 		if c.testWithServerEvalFn {
@@ -77,33 +78,29 @@ func TestRun(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			servers, serverAddrs := consulServers(t, 3, c.serverConfigFn)
-			serversByNodeId := map[string]*testutil.TestServer{}
-			for _, srv := range servers {
-				serversByNodeId[srv.Config.NodeID] = srv
-			}
+			servers := startConsulServers(t, 3, c.serverConfigFn)
 
 			// To test with local Consul servers, we inject custom server ports. The Config struct,
 			// go-netaddrs, and the server watch stream do not support per-server ports.
-			w.discoverer = &testDiscoverer{addrs: serverAddrs}
-			w.nodeToAddrFn = func(nodeID, addr string) (Addr, error) {
-				if srv, ok := serversByNodeId[nodeID]; ok {
-					return MakeAddr(addr, srv.Config.Ports.GRPC)
-				}
-				return Addr{}, fmt.Errorf("no test server with node id %q", nodeID)
-			}
+			w.discoverer = servers
+			w.nodeToAddrFn = servers.nodeToAddrFn
+
 			// Start the Watcher.
+			subscribeChan := w.Subscribe()
 			go w.Run()
 			t.Cleanup(w.Stop)
 
-			// Get initial initialState. This blocks until initialization is complete.
+			// Get initial state. This blocks until initialization is complete.
 			initialState, err := w.State()
 			require.NoError(t, err)
 			require.NotNil(t, initialState, initialState.GRPCConn)
-			require.Contains(t, servers, initialState.Address.String())
+			require.Contains(t, servers.servers, initialState.Address.String())
 
 			// Make sure the ServerEvalFn is called (or not).
 			require.Equal(t, c.testWithServerEvalFn, wasServerEvalFnCalled)
+
+			// Check we can also get state this way.
+			require.Equal(t, initialState, receiveSubscribeState(t, ctx, subscribeChan))
 
 			// check the token we get back.
 			switch c.config.Credentials.Type {
@@ -138,76 +135,114 @@ func TestRun(t *testing.T) {
 			unaryRequest(t)
 			streamRequest(t)
 
-			currentServer, ok := servers[initialState.Address.String()]
-			require.True(t, ok)
+			servers.stopServer(t, initialState.Address)
 
-			// Stop the current server. The Watcher should switch servers.
-			t.Logf("stop server: %s", initialState.Address.String())
-			err = currentServer.Stop()
-			if err != nil {
-				// this seems to to just be "exit code 1"
-				t.Logf("warn: server stop error: %v", err)
-			}
-
-			// Wait for requests to eventually succeed after the Watcher switches servers.
-			retry.RunWith(retryTimeout(5*time.Second), t, func(r *retry.R) {
-				unaryRequest(r)
-				streamRequest(r)
-			})
-
-			stateAfterStop, err := w.State()
-			require.NoError(t, err)
+			// Wait for the server switch.
+			stateAfterStop := receiveSubscribeState(t, ctx, subscribeChan)
+			require.NotEmpty(t, stateAfterStop.Address.String())
 			require.NotEqual(t, stateAfterStop.Address, initialState.Address)
+
+			// Check we can also get state this way.
+			state, err := w.State()
+			require.Equal(t, stateAfterStop, state)
+
+			// Check requests work.
+			unaryRequest(t)
+			streamRequest(t)
 
 			// Tell the Watcher to switch servers.
 			w.requestServerSwitch()
+			stateAfterSwitch := receiveSubscribeState(t, ctx, subscribeChan)
 
-			// Wait for requests to eventually succeed after the Watcher switches servers.
-			retry.RunWith(retryTimeout(5*time.Second), t, func(r *retry.R) {
-				unaryRequest(r)
-				streamRequest(r)
-			})
+			// Check the server changed.
+			require.NoError(t, err)
+			require.NotEmpty(t, stateAfterStop.Address.String())
+			require.NotEqual(t, stateAfterStop.Address, initialState.Address)
 
-			// TODO: Replace retries with a channel wait after we implement Subscribe
-			retry.RunWith(retryTimeout(5*time.Second), t, func(r *retry.R) {
-				stateAfterSwitch, err := w.State()
-				require.NoError(r, err)
-				require.NotEqual(r, stateAfterSwitch.Address, stateAfterStop.Address)
-			})
+			// Check we can also get state this way.
+			state, err = w.State()
+			require.NoError(t, err)
+			require.Equal(t, stateAfterSwitch, state)
+
+			unaryRequest(t)
+			streamRequest(t)
 
 			t.Logf("test successful")
 		})
 	}
 }
 
-func retryTimeout(timeout time.Duration) *retry.Timer {
-	return &retry.Timer{
-		Timeout: timeout,
-		Wait:    250 * time.Millisecond,
+func receiveSubscribeState(t *testing.T, ctx context.Context, ch <-chan State) State {
+	select {
+	case val := <-ch:
+		return val
+	case <-ctx.Done():
+		require.Failf(t, "failed to receive from channel", "error=%s", ctx.Err())
 	}
+	return State{}
 }
 
-// A custom Discoverer allows us to inject custom addresses with ports, so that
-// we can test with multiple local Consul test servers. go-netaddrs doesn't
-// support per-server ports.
-type testDiscoverer struct {
-	addrs []Addr
+type consulServers struct {
+	servers map[string]*testutil.TestServer
+	sync.Mutex
 }
 
-var _ Discoverer = (*testDiscoverer)(nil)
+// Implement a custom Discoverer to inject addresses with custom ports, so that
+// we can use multiple local Consul test servers. go-netaddrs doesn't support
+// per-server ports.
+var _ Discoverer = (*consulServers)(nil)
 
-func (t *testDiscoverer) Discover(ctx context.Context) ([]Addr, error) {
-	return t.addrs, nil
+func (c *consulServers) Discover(ctx context.Context) ([]Addr, error) {
+	return c.grpcAddrs()
 }
 
-// consulServers starts a multi-server Consul test cluster. It returns map of the
-// server gRPC addresses (ip+port) to each server object, and the list of parsed
-// server gRPC addresses.
-func consulServers(t *testing.T, n int, cb testutil.ServerConfigCallback) (map[string]*testutil.TestServer, []Addr) {
+func (c *consulServers) grpcAddrs() ([]Addr, error) {
+	c.Lock()
+	defer c.Unlock()
+
+	var addrs []Addr
+	for _, srv := range c.servers {
+		addr, err := MakeAddr(srv.Config.Bind, srv.Config.Ports.GRPC)
+		if err != nil {
+			return nil, err
+		}
+		addrs = append(addrs, addr)
+	}
+	return addrs, nil
+}
+
+func (c *consulServers) nodeToAddrFn(nodeID, addr string) (Addr, error) {
+	c.Lock()
+	defer c.Unlock()
+
+	for _, srv := range c.servers {
+		if srv.Config.NodeID == nodeID {
+			return MakeAddr(addr, srv.Config.Ports.GRPC)
+		}
+	}
+	return Addr{}, fmt.Errorf("no test server with node id: %q", nodeID)
+
+}
+
+func (c *consulServers) stopServer(t *testing.T, addr Addr) {
+	c.Lock()
+	defer c.Unlock()
+
+	srv := c.servers[addr.String()]
+	require.NotNil(t, srv, "no test server for address %s", addr)
+
+	// remove the server so that we don't return it in subsequent discover/watch requests.
+	delete(c.servers, addr.String())
+
+	_ = srv.Stop()
+}
+
+// startConsulServers starts a multi-server Consul test cluster. It returns a consulServers
+// struct containing the servers.
+func startConsulServers(t *testing.T, n int, cb testutil.ServerConfigCallback) *consulServers {
 	require.Greater(t, n, 0)
 
 	servers := map[string]*testutil.TestServer{}
-	var addrs []Addr
 	for i := 0; i < n; i++ {
 		server, err := testutil.NewTestServerConfigT(t, func(c *testutil.TestServerConfig) {
 			c.Bootstrap = len(servers) == 0
@@ -225,17 +260,14 @@ func consulServers(t *testing.T, n int, cb testutil.ServerConfigCallback) (map[s
 			_ = server.Stop()
 		})
 
-		addr, err := MakeAddr(server.Config.Bind, server.Config.Ports.GRPC)
-		require.NoError(t, err)
-
+		addr := mustMakeAddr(t, server.Config.Bind, server.Config.Ports.GRPC)
 		servers[addr.String()] = server
-		addrs = append(addrs, addr)
 	}
 
 	for _, server := range servers {
 		server.WaitForLeader(t)
 	}
-	return servers, addrs
+	return &consulServers{servers: servers}
 }
 
 func enableACLsConfigFn(c *testutil.TestServerConfig) {
