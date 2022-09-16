@@ -44,7 +44,7 @@ to another via the custom resolver, the gRPC connection will shut down the sub-c
 A big question: why do we have the custom gRPC balancer?
 
 While the gRPC connection is asynchronously switching from one address to another, we want to answer
-the following type of questions to determine if it has connecto to that address:
+the following type of questions to determine if it has connected to that address:
 
 * Which sub-connection or address is the gRPC connection currently using?
 * Has the connection finished switching from one sub-connection to another? Has it definitely
@@ -56,8 +56,9 @@ automatically picks a sub-connection when there are multiple, and the response a
 don't seem to contain the remote server address.
 
 The goal of the library is to provide a connection to a "known good" Consul server - a server that
-we were certainly able to connect to successfuly. But that is difficult if we cannot reliably map a
-response or error back to a specific server.
+we were certainly able to connect to successfuly. But that is difficult if the connection could
+be using one of two sub-connections and if we cannot reliably map a response or error back to a
+specific server.
 
 So, we resort to using a gRPC balancer to help solve this.
 
