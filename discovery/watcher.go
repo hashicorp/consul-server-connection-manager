@@ -71,7 +71,8 @@ type Watcher struct {
 	discoverer Discoverer
 	// function to inject custom server ports for tests
 	nodeToAddrFn func(nodeID, addr string) (Addr, error)
-	acls         ACLs
+
+	acls *ACLs
 
 	subcribers []chan State
 }
@@ -104,7 +105,6 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 			return MakeAddr(addr, config.GRPCPort)
 		},
 	}
-	w.acls = newDefaultACLs(w, w.log)
 	w.ctx, w.ctxCancel = context.WithCancel(ctx)
 	w.currentServer.Store(serverState{})
 	w.token.Store("")
@@ -195,12 +195,20 @@ func (w *Watcher) currentState() State {
 // Stop stops the Watcher after Run is called.
 // This cancels the Watcher's internal context.
 func (w *Watcher) Stop() {
-	// if applicable, attempt the logout. we ignore errors here. this must be
-	// done prior to w.ctx being cancelled and prior to the connection being
-	// closed.
-	err := w.acls.Logout(w.ctx)
-	if err != nil {
-		w.log.Error("acl logout failed", "error", err)
+	w.log.Debug("Watcher.Stop")
+	// If applicable, attempt to log out. This must be done prior to the
+	// connection being closed. We ignore errors since we must continue to shut
+	// down.
+	//
+	// Do not use w.ctx which is likely already cancelled at this point.
+	if w.acls != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		err := w.acls.Logout(ctx)
+		if err != nil {
+			w.log.Error("acl logout failed", "error", err)
+		}
 	}
 
 	// canceling the context will abort w.run()
@@ -365,10 +373,15 @@ func (w *Watcher) connect(addr Addr) (serverState, error) {
 			case CredentialsTypeStatic:
 				w.token.Store(w.config.Credentials.Static.Token)
 			case CredentialsTypeLogin:
+				if w.acls == nil {
+					w.acls = newACLs(w.conn, w.config)
+				}
 				token, err := w.acls.Login(w.ctx)
 				if err != nil {
+					w.log.Error("auth method login failed", "error", err)
 					return serverState{}, err
 				}
+				w.log.Info("auth method login succeeded")
 				w.token.Store(token)
 			}
 		}

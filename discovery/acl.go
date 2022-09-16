@@ -2,68 +2,72 @@ package discovery
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/hashicorp/consul/proto-public/pbacl"
-	"github.com/hashicorp/go-hclog"
+	"google.golang.org/grpc"
 )
 
-type ACLs interface {
-	Login(context.Context) (string, error)
-	Logout(context.Context) error
+type ACLs struct {
+	client pbacl.ACLServiceClient
+	cfg    LoginCredential
+
+	// remember this for logout.
+	token *pbacl.LoginToken
 }
 
-type defaultACLs struct {
-	watcher *Watcher
-	log     hclog.Logger
+func newACLs(conn grpc.ClientConnInterface, config Config) *ACLs {
+	return &ACLs{
+		client: pbacl.NewACLServiceClient(conn),
+		cfg:    config.Credentials.Login,
+	}
 }
 
-var _ ACLs = (*defaultACLs)(nil)
-
-func newDefaultACLs(watcher *Watcher, log hclog.Logger) *defaultACLs {
-	return &defaultACLs{watcher: watcher, log: log}
-}
-
-func (a *defaultACLs) Login(ctx context.Context) (string, error) {
-	if a.watcher.config.Credentials.Type != CredentialsTypeLogin {
-		return "", nil
+func (a *ACLs) Login(ctx context.Context) (string, error) {
+	if a.token != nil {
+		// detect mis-use. we shouldn't call this twice.
+		return "", fmt.Errorf("already logged in")
 	}
 
-	cfg := a.watcher.config.Credentials.Login
+	req := &pbacl.LoginRequest{
+		AuthMethod:  a.cfg.AuthMethod,
+		BearerToken: a.cfg.BearerToken,
+		Meta:        a.cfg.Meta,
+		Namespace:   a.cfg.Namespace,
+		Partition:   a.cfg.Partition,
+		Datacenter:  a.cfg.Datacenter,
+	}
 
-	client := pbacl.NewACLServiceClient(a.watcher.conn)
-	resp, err := client.Login(ctx, &pbacl.LoginRequest{
-		AuthMethod:  cfg.AuthMethod,
-		BearerToken: cfg.BearerToken,
-		Meta:        cfg.Meta,
-		Namespace:   cfg.Namespace,
-		Partition:   cfg.Partition,
-		Datacenter:  cfg.Datacenter,
-	})
+	resp, err := a.client.Login(ctx, req)
 	if err != nil {
-		a.log.Error("auth method login failed", "error", err)
 		return "", err
 	}
 
-	tok := resp.GetToken()
-	a.log.Info("auth method login successful", "accessor-id", tok.AccessorId)
-	// TODO: do the acl token replication workaround here?
-	//       https://github.com/hashicorp/consul-k8s/pull/887
-	return tok.SecretId, nil
+	a.token = resp.GetToken()
+	if a.token == nil || a.token.SecretId == "" {
+		return "", fmt.Errorf("no secret id in response")
+	}
+	// TODO: We are prone to a negative caching problem that might cause "ACL not found" on
+	// subsequent requests that use the token for the caching period (default 30s). See:
+	// https://github.com/hashicorp/consul-k8s/pull/887
+	//
+	// A short sleep should mitigate some cases of the problem until we address this properly.
+	time.Sleep(100 * time.Millisecond)
+	return a.token.SecretId, nil
 }
 
-func (a *defaultACLs) Logout(ctx context.Context) error {
-	if a.watcher.config.Credentials.Type != CredentialsTypeLogin {
+func (a *ACLs) Logout(ctx context.Context) error {
+	if a.token == nil || a.token.SecretId == "" {
+		// no token to use for logout.
 		return nil
 	}
-	token := a.watcher.token.Load().(string)
-	if token == "" {
-		return nil
-	}
-
-	client := pbacl.NewACLServiceClient(a.watcher.conn)
-	_, err := client.Logout(ctx, &pbacl.LogoutRequest{
-		Token:      token,
-		Datacenter: "",
+	_, err := a.client.Logout(ctx, &pbacl.LogoutRequest{
+		Token:      a.token.SecretId,
+		Datacenter: a.cfg.Datacenter,
 	})
+	if err == nil {
+		a.token = nil
+	}
 	return err
 }

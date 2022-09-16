@@ -96,7 +96,13 @@ func TestRun(t *testing.T) {
 			// go-netaddrs, and the server watch stream do not support per-server ports.
 			w.discoverer = servers
 			w.nodeToAddrFn = servers.nodeToAddrFn
-			w.acls = &fakeACLs{}
+
+			// Mock the ACL Login / Logout gRPC calls to return this token.
+			// This must be a real token since we have real (test) Consul servers.
+			if c.config.Credentials.Type == CredentialsTypeLogin {
+				aclFixture := makeACLMockFixture(testServerManagementToken)
+				w.acls = aclFixture.SetupClientMock(t)
+			}
 
 			// Start the Watcher.
 			subscribeChan := w.Subscribe()
@@ -284,18 +290,4 @@ func enableACLsConfigFn(c *testutil.TestServerConfig) {
 	c.ACL.Enabled = true
 	c.ACL.Tokens.InitialManagement = testServerManagementToken
 	c.ACL.DefaultPolicy = "deny"
-}
-
-type fakeACLs struct{}
-
-var _ ACLs = (*fakeACLs)(nil)
-
-// Login implements ACLs
-func (*fakeACLs) Login(context.Context) (string, error) {
-	return testServerManagementToken, nil
-}
-
-// Logout implements ACLs
-func (*fakeACLs) Logout(context.Context) error {
-	return nil
 }
