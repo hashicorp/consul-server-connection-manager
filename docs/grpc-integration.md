@@ -44,7 +44,7 @@ to another via the custom resolver, the gRPC connection will shut down the sub-c
 A big question: why do we have the custom gRPC balancer?
 
 While the gRPC connection is asynchronously switching from one address to another, we want to answer
-the following type of questions in order to evaluate whether the
+the following type of questions to determine if it has connecto to that address:
 
 * Which sub-connection or address is the gRPC connection currently using?
 * Has the connection finished switching from one sub-connection to another? Has it definitely
@@ -63,10 +63,10 @@ So, we resort to using a gRPC balancer to help solve this.
 
 ## Custom gRPC balancer
 
-We use a gRPC balancer to give us insight into the current state of the gRPC sub-connections.
-We do not actually use the custom balancer for actual load balancing strategy. In particular, we do
-not use it as part of the library's compatiblity with the Consul server's xDS load balancing. It's
-purely a tool to view the gRPC sub-connection states and to work around library abstractions.
+We use a gRPC balancer to give us insight into the current state of the gRPC sub-connections. We do
+not actually use the custom balancer for a load balancing strategy. In particular, we do not use it
+as part of the library's compatiblity with the Consul server's xDS load balancing. It's purely a
+tool to view the gRPC sub-connection states in order to work around library abstractions.
 
 Our custom balancer is a wrapper around a gRPC `base.Balancer` so that our custom balancer is
 invoked whenever a sub-connection is created or when sub-connection state changes. The custom
@@ -85,7 +85,7 @@ address:
 
 Specifically, we block until there is one ready sub-connection for the new address, and all other
 sub-connections, if any, have been shut down. The sub-connection for the new address may never
-be ready (for example, if the server is unavailable) so this will timeout after a short while
+be ready (for example, if the server is unavailable) so this will time out after a short while
 and assume we failed to connect to that server.
 
 The following example diagram shows the connection state transitions:

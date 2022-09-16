@@ -24,7 +24,7 @@ It supports the following:
 
 First, import the library:
 
-```
+```go
 import "github.com/hashicorp/consul-server-connection-manager/discovery"
 ```
 
