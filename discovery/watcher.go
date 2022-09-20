@@ -72,6 +72,8 @@ type Watcher struct {
 	// function to inject custom server ports for tests
 	nodeToAddrFn func(nodeID, addr string) (Addr, error)
 
+	acls *ACLs
+
 	subcribers []chan State
 }
 
@@ -193,13 +195,28 @@ func (w *Watcher) currentState() State {
 // Stop stops the Watcher after Run is called.
 // This cancels the Watcher's internal context.
 func (w *Watcher) Stop() {
+	w.log.Debug("Watcher.Stop")
+	// If applicable, attempt to log out. This must be done prior to the
+	// connection being closed. We ignore errors since we must continue to shut
+	// down.
+	//
+	// Do not use w.ctx which is likely already cancelled at this point.
+	if w.acls != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		err := w.acls.Logout(ctx)
+		if err != nil {
+			w.log.Error("acl logout failed", "error", err)
+		}
+	}
+
 	// canceling the context will abort w.run()
 	w.ctxCancel()
 	// w.run() sets runComplete when it returns
 	<-w.runComplete.Done()
 
 	w.conn.Close()
-	// TODO: acl token logout?
 }
 
 func (w *Watcher) run() {
@@ -356,8 +373,16 @@ func (w *Watcher) connect(addr Addr) (serverState, error) {
 			case CredentialsTypeStatic:
 				w.token.Store(w.config.Credentials.Static.Token)
 			case CredentialsTypeLogin:
-				// TODO: Support ACL token login.
-				panic("acl token login is unimplemented")
+				if w.acls == nil {
+					w.acls = newACLs(w.conn, w.config)
+				}
+				token, err := w.acls.Login(w.ctx)
+				if err != nil {
+					w.log.Error("auth method login failed", "error", err)
+					return serverState{}, err
+				}
+				w.log.Info("auth method login succeeded")
+				w.token.Store(token)
 			}
 		}
 	}

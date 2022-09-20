@@ -38,6 +38,18 @@ func TestRun(t *testing.T) {
 			},
 			serverConfigFn: enableACLsConfigFn,
 		},
+		"auth method login": {
+			config: Config{
+				Credentials: Credentials{
+					Type: CredentialsTypeLogin,
+					// We mock the login/logout calls.
+					Login: LoginCredential{
+						AuthMethod:  "kubernetes",
+						BearerToken: "fake-token",
+					},
+				},
+			},
+		},
 		"server watch disabled": {
 			config: Config{
 				ServerWatchDisabled:         true,
@@ -85,6 +97,13 @@ func TestRun(t *testing.T) {
 			w.discoverer = servers
 			w.nodeToAddrFn = servers.nodeToAddrFn
 
+			// Mock the ACL Login / Logout gRPC calls to return this token.
+			// This must be a real token since we have real (test) Consul servers.
+			if c.config.Credentials.Type == CredentialsTypeLogin {
+				aclFixture := makeACLMockFixture(testServerManagementToken)
+				w.acls = aclFixture.SetupClientMock(t)
+			}
+
 			// Start the Watcher.
 			subscribeChan := w.Subscribe()
 			go w.Run()
@@ -102,13 +121,10 @@ func TestRun(t *testing.T) {
 			// Check we can also get state this way.
 			require.Equal(t, initialState, receiveSubscribeState(t, ctx, subscribeChan))
 
-			// check the token we get back.
-			switch c.config.Credentials.Type {
-			case CredentialsTypeStatic:
+			// Check the token we get back.
+			if c.config.Credentials.Type != "" {
 				require.Equal(t, initialState.Token, testServerManagementToken)
-			case CredentialsTypeLogin:
-				require.FailNow(t, "TODO: support acl token login")
-			default:
+			} else {
 				require.Equal(t, initialState.Token, "")
 			}
 
