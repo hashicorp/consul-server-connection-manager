@@ -132,7 +132,7 @@ for {
 }
 ```
 
-### Disabling the Server Watch
+### Servers Behind a Load Balancer
 
 By default, the Watcher opens a
 [`WatchServers`](https://github.com/hashicorp/consul/blob/main/proto-public/pbserverdiscovery/serverdiscovery.proto)
@@ -143,11 +143,6 @@ The server watch stream should be disabled for cases where `WatchServers` return
 addresses than those we should connect to. For example, if your Consul servers are behind a load
 balancer, the library should connect to the load balancer address rather than directly to one of the
 Consul server addresses.
-
-Additionally, the `WatchServers` stream is not used if a particular Consul server does not support
-`WatchServers`. The Watcher determines feature support by fetching the [supported dataplane
-features](https://github.com/hashicorp/consul/blob/main/proto-public/pbdataplane/dataplane.proto)
-and checking for the `DATAPLANE_FEATURES_WATCH_SERVERS` feature in the response.
 
 When the server watch stream is disabled, the Watcher periodically makes a gRPC request to its
 current server to check if it can still connect to that server. By default, it makes a gRPC request
@@ -162,6 +157,17 @@ cfg := discovery.Config{
     ServerWatchDisabledInterval: 1 * time.Minute,
 }
 ```
+
+#### Server Watch Unsupported
+
+Additionally, the `WatchServers` stream is not used if a particular Consul server does not support
+`WatchServers`. The Watcher determines feature support by fetching the [supported dataplane
+features](https://github.com/hashicorp/consul/blob/main/proto-public/pbdataplane/dataplane.proto)
+and checking for the `DATAPLANE_FEATURES_WATCH_SERVERS` feature in the response.
+
+When `WatchServers` is unsupported, the Watcher works the same as when `ServerWatchDisabled = true`.
+It periodically makes a gRPC request to check if it can still conect to the current server, at an
+interval controlled by the `ServerWatchDisabledInterval`.
 
 ### Server Filtering
 
