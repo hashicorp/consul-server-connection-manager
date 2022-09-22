@@ -19,6 +19,7 @@ It supports the following:
 * Automatic rediscovery and reconnection to another Consul server
 * Consul ACL token authentication
 * Compatibility with Consul server xDS load balancing
+* Optional custom server filtering
 
 ## Usage
 
@@ -128,5 +129,59 @@ for {
     case <-ctx.Done():
         log.Fatal(ctx.Err())
     }
+}
+```
+
+### Servers Behind a Load Balancer
+
+By default, the Watcher opens a
+[`WatchServers`](https://github.com/hashicorp/consul/blob/main/proto-public/pbserverdiscovery/serverdiscovery.proto)
+gRPC stream after connecting to a Consul server. This stream notifies us of new or changed Consul
+server addresses.
+
+The server watch stream should be disabled for cases where `WatchServers` returns different
+addresses than those we should connect to. For example, if your Consul servers are behind a load
+balancer, the library should connect to the load balancer address rather than directly to one of the
+Consul server addresses.
+
+When the server watch stream is disabled, the Watcher periodically makes a gRPC request to its
+current server to check if it can still connect to that server. By default, it makes a gRPC request
+once per minute, which can be changed by setting the `ServerWatchDisabledInterval`.
+
+```go
+cfg := discovery.Config{
+    Addresses: "my.loadbalancer.example.com",
+    // This disables use of the WatchServers stream.
+    ServerWatchDisabled: true,
+    // The following is the default value for a periodic connect to the server.
+    ServerWatchDisabledInterval: 1 * time.Minute,
+}
+```
+
+#### Server Watch Unsupported
+
+Additionally, the `WatchServers` stream is not used if a particular Consul server does not support
+`WatchServers`. The Watcher determines feature support by fetching the [supported dataplane
+features](https://github.com/hashicorp/consul/blob/main/proto-public/pbdataplane/dataplane.proto)
+and checking for the `DATAPLANE_FEATURES_WATCH_SERVERS` feature in the response.
+
+When `WatchServers` is unsupported, the Watcher works the same as when `ServerWatchDisabled = true`.
+It periodically makes a gRPC request to check if it can still conect to the current server, at an
+interval controlled by the `ServerWatchDisabledInterval`.
+
+### Server Filtering
+
+By default, the Watcher will choose any server at random. You can pass `ServerEvalFn` to have the
+Watcher ignore certain servers. This function is called each time the Watcher selects a new server.
+When the function returns false, the Watcher will ignore that server.
+
+A common reason to set `ServerEvalFn` is to filter servers based on supported dataplane features,
+for which you can use the `discovery.SupportsDataplaneFeatures` helper:
+
+```go
+cfg := discovery.Config{
+    ServerEvalFn: discovery.SupportsDataplaneFeatures(
+        pbdataplane.DataplaneFeatures_DATAPLANE_FEATURES_ENVOY_BOOTSTRAP_CONFIGURATION.String(),
+    ),
 }
 ```
