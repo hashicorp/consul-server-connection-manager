@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/armon/go-metrics"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/hashicorp/consul/proto-public/pbdataplane"
 	"github.com/hashicorp/consul/proto-public/pbserverdiscovery"
@@ -257,6 +258,7 @@ func (w *Watcher) run() {
 }
 
 func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
+	start := time.Now()
 	w.log.Debug("Watcher.nextServer", "addrs", addrs.String())
 
 	w.switchLock.Lock()
@@ -318,6 +320,7 @@ func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
 			return addrs, fmt.Errorf("ServerEvalFn returned false for server: %q", state.Address.String())
 		}
 	}
+	metrics.MeasureSince([]string{"connect_duration"}, start)
 
 	w.log.Debug("connected to server", "addr", current.addr)
 

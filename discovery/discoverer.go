@@ -3,7 +3,9 @@ package discovery
 import (
 	"context"
 	"net"
+	"time"
 
+	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-hclog"
 	netaddrs "github.com/hashicorp/go-netaddrs"
 )
@@ -25,11 +27,14 @@ func NewNetaddrsDiscoverer(config Config, log hclog.Logger) *NetaddrsDiscoverer 
 }
 
 func (n *NetaddrsDiscoverer) Discover(ctx context.Context) ([]Addr, error) {
+	start := time.Now()
 	addrs, err := netaddrs.IPAddrs(ctx, n.config.Addresses, n.log)
 	if err != nil {
 		n.log.Error("discovering server addresses", "err", err)
 		return nil, err
 	}
+
+	metrics.MeasureSince([]string{"discover_servers_duration"}, start)
 
 	var result []Addr
 	for _, addr := range addrs {
