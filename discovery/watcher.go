@@ -258,12 +258,12 @@ func (w *Watcher) run() {
 }
 
 func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
-	start := time.Now()
 	w.log.Debug("Watcher.nextServer", "addrs", addrs.String())
 
 	w.switchLock.Lock()
 	w.ctxForSwitch, w.cancelForSwitch = context.WithCancel(w.ctx)
 	w.switchLock.Unlock()
+	start := time.Now()
 
 	defer func() {
 		// If we return without picking a server, then clear the gRPC connection's
@@ -287,6 +287,7 @@ func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
 	}
 	if len(healthy) == 0 {
 		// No healthy servers. Re-run discovery.
+		metrics.SetGauge([]string{"consul_connected"}, 0)
 		found, err := w.discover()
 		if err != nil {
 			return nil, err
@@ -321,7 +322,7 @@ func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
 		}
 	}
 	metrics.MeasureSince([]string{"connect_duration"}, start)
-
+	metrics.SetGauge([]string{"consul_connected"}, 1)
 	w.log.Debug("connected to server", "addr", current.addr)
 
 	// Set init complete here. This indicates to Run() that initialization

@@ -26,7 +26,7 @@ func newACLs(conn grpc.ClientConnInterface, config Config) *ACLs {
 }
 
 func (a *ACLs) Login(ctx context.Context) (string, error) {
-	start := time.Now()
+
 	if a.token != nil {
 		// detect mis-use. we shouldn't call this twice.
 		return "", fmt.Errorf("already logged in")
@@ -40,7 +40,7 @@ func (a *ACLs) Login(ctx context.Context) (string, error) {
 		Partition:   a.cfg.Partition,
 		Datacenter:  a.cfg.Datacenter,
 	}
-
+	start := time.Now()
 	resp, err := a.client.Login(ctx, req)
 	if err != nil {
 		return "", err

@@ -16,3 +16,10 @@ var Summaries = []prometheus.SummaryDefinition{
 		Help: "This will be a sample of the time it takes to login to Consul.",
 	},
 }
+
+var Gauges = []prometheus.GaugeDefinition{
+	{
+		Name: []string{"consul_connected"},
+		Help: "This will either be 0 or 1 depending on whether the dataplane is currently connected to a Consul server.",
+	},
+}
