@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/armon/go-metrics"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/hashicorp/consul/proto-public/pbdataplane"
 	"github.com/hashicorp/consul/proto-public/pbserverdiscovery"
@@ -251,10 +252,12 @@ func (w *Watcher) run() {
 		// When this successfully connects to a server, it returns the chosen
 		// server and the latest set of server addresses. If we get an error,
 		// then we retry with backoff.
+		metrics.SetGauge([]string{"consul_connected"}, 0)
 		addrs, err = w.nextServer(addrs)
 		if err != nil {
 			w.log.Error("run", "err", err.Error())
 		}
+		metrics.SetGauge([]string{"consul_connected"}, 0)
 
 		// Retry with backoff.
 		//
@@ -281,6 +284,7 @@ func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
 	w.switchLock.Lock()
 	w.ctxForSwitch, w.cancelForSwitch = context.WithCancel(w.ctx)
 	w.switchLock.Unlock()
+	start := time.Now()
 
 	defer func() {
 		// If we return without picking a server, then clear the gRPC connection's
@@ -304,6 +308,7 @@ func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
 	}
 	if len(healthy) == 0 {
 		// No healthy servers. Re-run discovery.
+
 		found, err := w.discover()
 		if err != nil {
 			return nil, err
@@ -337,7 +342,8 @@ func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
 			return addrs, fmt.Errorf("ServerEvalFn returned false for server: %q", state.Address.String())
 		}
 	}
-
+	metrics.MeasureSince([]string{"connect_duration"}, start)
+	metrics.SetGauge([]string{"consul_connected"}, 1)
 	w.log.Debug("connected to server", "addr", current.addr)
 
 	// Set init complete here. This indicates to Run() that initialization

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/armon/go-metrics"
 	"github.com/hashicorp/consul/proto-public/pbacl"
 	"google.golang.org/grpc"
 )
@@ -25,6 +26,7 @@ func newACLs(conn grpc.ClientConnInterface, config Config) *ACLs {
 }
 
 func (a *ACLs) Login(ctx context.Context) (string, error) {
+
 	if a.token != nil {
 		// detect mis-use. we shouldn't call this twice.
 		return "", fmt.Errorf("already logged in")
@@ -38,11 +40,12 @@ func (a *ACLs) Login(ctx context.Context) (string, error) {
 		Partition:   a.cfg.Partition,
 		Datacenter:  a.cfg.Datacenter,
 	}
-
+	start := time.Now()
 	resp, err := a.client.Login(ctx, req)
 	if err != nil {
 		return "", err
 	}
+	metrics.MeasureSince([]string{"login_duration"}, start)
 
 	a.token = resp.GetToken()
 	if a.token == nil || a.token.SecretId == "" {
