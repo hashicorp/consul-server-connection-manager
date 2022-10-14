@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 )
 
 // State is the info a caller wants to know after initialization.
@@ -119,6 +120,24 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 		grpc.WithTransportCredentials(cred),
 		grpc.WithUnaryInterceptor(makeUnaryInterceptor(w)),
 		grpc.WithStreamInterceptor(makeStreamInterceptor(w)),
+		// These keepalive parameters were chosen to match the existing behavior of
+		// Consul agents [1].
+		//
+		// Consul servers have a policy to terminate connections that send keepalive
+		// pings more frequently than every 15 seconds [2] so we need to choose an
+		// interval larger than that.
+		//
+		// Some users choose to front their Consul servers with an AWS Network Load
+		// Balancer, which has a hard idle timeout of 350 seconds [3] so we need to
+		// choose an interval smaller than that.
+		//
+		//	1. https://github.com/hashicorp/consul/blob/e6b55d1d81c6e90dd5d09e7dfb24d1db7604b7b5/agent/grpc-internal/client.go#L137-L151
+		//	2. https://github.com/hashicorp/consul/blob/e6b55d1d81c6e90dd5d09e7dfb24d1db7604b7b5/agent/grpc-external/server.go#L44-L47
+		//	3. https://docs.aws.amazon.com/elasticloadbalancing/latest/network/network-load-balancers.html#connection-idle-timeout
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:    30 * time.Second,
+			Timeout: 30 * time.Second,
+		}),
 		// note: experimental apis
 		grpc.WithResolvers(w.resolver),
 		grpc.WithDefaultServiceConfig(
