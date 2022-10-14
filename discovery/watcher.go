@@ -233,10 +233,12 @@ func (w *Watcher) run() {
 		// When this successfully connects to a server, it returns the chosen
 		// server and the latest set of server addresses. If we get an error,
 		// then we retry with backoff.
+		metrics.SetGauge([]string{"consul_connected"}, 0)
 		addrs, err = w.nextServer(addrs)
 		if err != nil {
 			w.log.Error("run", "err", err.Error())
 		}
+		metrics.SetGauge([]string{"consul_connected"}, 0)
 
 		// Retry with backoff.
 		//
@@ -287,7 +289,7 @@ func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
 	}
 	if len(healthy) == 0 {
 		// No healthy servers. Re-run discovery.
-		metrics.SetGauge([]string{"consul_connected"}, 0)
+
 		found, err := w.discover()
 		if err != nil {
 			return nil, err
