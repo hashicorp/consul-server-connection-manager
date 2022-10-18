@@ -243,7 +243,7 @@ func (w *Watcher) run() {
 	defer w.runComplete.SetDone()
 
 	// addrs is the current set of servers we know about.
-	var addrs *addrSet
+	addrs := newAddrSet()
 	var err error
 
 	for {
@@ -253,7 +253,7 @@ func (w *Watcher) run() {
 		// server and the latest set of server addresses. If we get an error,
 		// then we retry with backoff.
 		metrics.SetGauge([]string{"consul_connected"}, 0)
-		addrs, err = w.nextServer(addrs)
+		err = w.nextServer(addrs)
 		if err != nil {
 			w.log.Error("run", "err", err.Error())
 		}
@@ -278,7 +278,7 @@ func (w *Watcher) run() {
 	}
 }
 
-func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
+func (w *Watcher) nextServer(addrs *addrSet) error {
 	w.log.Debug("Watcher.nextServer", "addrs", addrs.String())
 
 	w.switchLock.Lock()
@@ -298,53 +298,65 @@ func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
 		}
 	}()
 
-	// Choose a server from the known "healthy" servers.
-	// If none are healthy, re-run address discovery.
 	w.currentServer.Store(serverState{})
 
-	var healthy []Addr
-	if addrs != nil {
-		healthy = addrs.Get(OK)
-	}
-	if len(healthy) == 0 {
-		// No healthy servers. Re-run discovery.
-
-		found, err := w.discover()
+	if addrs.AllAttempted() {
+		// Re-run discovery. We've attempted all servers since the last time
+		// addresses were updated (by discovery or by the server watch stream,
+		// if enabled). Or, we have no addresses.
+		//
+		// We run discovery at these times:
+		// - At startup: when we have no addresses.
+		// - If the server watch is disabled: After attempting each address once.
+		// - If the server watch is enabled: Only after attempting each address
+		//   once since the last successful update from the server watch stream.
+		//   If the server watch stream is enabled and generally healthy
+		//   then we will rarely ever re-run discovery.
+		found, err := w.discoverer.Discover(w.ctx)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		addrs = found
-		healthy = addrs.Get(OK)
+
+		// This preserves lastAttempt timestamps for addresses currently in
+		// addrs, so that we try the least-recently attempted server. This
+		// ensures we try all servers once before trying the same server twice.
+		addrs.SetAddrs(found...)
 	}
 
-	if len(healthy) > 0 {
+	if !addrs.AllAttempted() {
 		// Choose a server as "current" and connect to it.
-		addr := healthy[0]
+		//
+		// Addresses are sorted first by unattempted, and then by lastAttempt timestamp
+		// so that we always try the least-recently attempted address.
+		sortedAddrs := addrs.Sorted()
+		w.log.Debug("current known Consul servers", "addresses", sortedAddrs)
+
+		addr := sortedAddrs[0]
+		addrs.SetAttemptTime(addr)
+
 		server, err := w.connect(addr)
 		if err != nil {
-			addrs.Put(NotOK, addr)
 			// Return here in order to backoff between attempts to each server.
-			return addrs, err
+			return err
 		}
 		w.currentServer.Store(server)
 	}
 
 	current := w.currentServer.Load().(serverState)
 	if current.addr.Empty() {
-		return addrs, fmt.Errorf("unable to connect to a server")
+		return fmt.Errorf("unable to connect to a server")
 	}
 
 	if eval := w.config.ServerEvalFn; eval != nil {
 		state := w.currentState()
 		if !eval(state) {
-			addrs.Put(NotOK, state.Address)
 			w.currentServer.Store(serverState{})
-			return addrs, fmt.Errorf("ServerEvalFn returned false for server: %q", state.Address.String())
+			return fmt.Errorf("ServerEvalFn returned false for server: %q", state.Address.String())
 		}
 	}
 	metrics.MeasureSince([]string{"connect_duration"}, start)
 	metrics.SetGauge([]string{"consul_connected"}, 1)
-	w.log.Debug("connected to server", "addr", current.addr)
+	w.log.Debug("connected to Consul server", "address", current.addr)
 
 	// Set init complete here. This indicates to Run() that initialization
 	// completed: we found a server, have a token (if any), fetched dataplane
@@ -353,27 +365,9 @@ func (w *Watcher) nextServer(addrs *addrSet) (*addrSet, error) {
 
 	w.notifySubscribers()
 
-	newAddrs, err := w.watch()
-	if newAddrs != nil {
-		addrs = newAddrs
-	}
-	if err != nil {
-		addrs.Put(NotOK, current.addr)
-	}
-	return addrs, err
-}
-
-// discover runs (go-netaddrs) discovery to find server addresses.
-// It returns the set of found addresses, all marked "OK".
-func (w *Watcher) discover() (*addrSet, error) {
-	addrs, err := w.discoverer.Discover(w.ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	set := newAddrSet()
-	set.Put(OK, addrs...)
-	return set, nil
+	// Wait forever while connected to this server, until an error or
+	// disconnect for any reason.
+	return w.watch(addrs)
 }
 
 // connect does initialization for the given address. This includes updating the
@@ -442,18 +436,10 @@ func (w *Watcher) switchServer(to Addr) error {
 // call from other goroutines. It does not block to wait for the server switch.
 //
 // This works by canceling a context (w.ctxForSwitch) to abort certain types of
-// Watcher operations. This induces an error that causes the Watcher to mark
-// the server it's currently using "NotOK", which is  the same logic as for any
-// other type of error. This is kind of indirect, but also nice in that we
-// don't have to special case much here.
-//
-// Note that when a server is marked "NotOK", that status only persists until
-// the next time the Watcher refreshes server IPs (via either discover() or
-// watchStream()). If there is only one Consul server, or if the Watcher
-// currently has only one "OK" server, then we would mark it "NotOK", re-run
-// address discovery to get a fresh list of "OK" addresses, and then
-// potentially reconnect to that same server we just switched away from (at
-// random).
+// Watcher operations. This induces an error that causes the Watcher to
+// disconnect from it's current server and pick a new one, which is the same
+// logic as for any other type of error. This is kind of indirect, but also
+// nice in that we don't have to special case much here.
 func (w *Watcher) requestServerSwitch() {
 	w.log.Debug("Watcher.requestServerSwitch")
 	if !w.switchLock.TryLock() {
@@ -488,45 +474,37 @@ func (w *Watcher) getDataplaneFeatures() (map[string]bool, error) {
 	return features, nil
 }
 
-// watch blocks to wait for server set changes. This aborts on receiving an
-// error from the server, when the Watcher's context is cancelled, or (TODO)
-// when the Watcher is told to switch servers.
+// watch blocks to wait for server set changes. It aborts on receiving an error
+// from the server, including when the Watcher's context is cancelled, and
+// including when the Watcher is told to switch servers.
 //
-// This returns an addrSet containing the most recent set of servers. If the
-// addrSet is nil, then there were not changes seen to the server set. (This is
-// the case if the server watch stream is disabled.
-//
-// When this returns with an error, the current server should no longer be
-// considered "OK". This may return a non-nil addrSet and a non-nil error (it
-// will usually do this when the server watch stream is aborted).
-func (w *Watcher) watch() (*addrSet, error) {
+// This updates addrs in place to add or remove servers found from the server
+// watch stream, if applicable.
+func (w *Watcher) watch(addrs *addrSet) error {
 	current := w.currentServer.Load().(serverState)
 	if current.dataplaneFeatures["DATAPLANE_FEATURES_WATCH_SERVERS"] && !w.config.ServerWatchDisabled {
-		return w.watchStream()
+		return w.watchStream(addrs)
 	} else {
 		return w.watchSleep()
 	}
 }
 
 // watchStream opens a gRPC stream to receive server set changes. This blocks
-// potentially forever.
+// potentially forever. It updates addrs in place, adding or removing servers
+// to match the response from the server watch stream.
 //
 // This may be aborted when the gRPC stream receives some error, when the
-// Watcher's context is cancelled, or (TODO) when the Watcher is told to switch
+// Watcher's context is cancelled, or when the Watcher is told to switch
 // servers.
-//
-// If an error that aborts the gRPC stream, we pass the non-nil error back,
-// and the server is marked unhealthy elsewhere.
-func (w *Watcher) watchStream() (*addrSet, error) {
+func (w *Watcher) watchStream(addrs *addrSet) error {
 	w.log.Debug("Watcher.watchStream")
 	client := pbserverdiscovery.NewServerDiscoveryServiceClient(w.conn)
 	serverStream, err := client.WatchServers(w.ctxForSwitch, &pbserverdiscovery.WatchServersRequest{})
 	if err != nil {
 		w.log.Error("unable to open server watch stream", "error", err)
-		return nil, err
+		return err
 	}
 
-	var set *addrSet
 	for {
 		// This blocks until there is a change from the server.
 		resp, err := serverStream.Recv()
@@ -534,11 +512,11 @@ func (w *Watcher) watchStream() (*addrSet, error) {
 			if !errors.Is(err, context.Canceled) {
 				w.log.Error("unable to receive from server watch stream", "error", err)
 			}
-			return set, err
+			return err
 		}
 
-		// The set of servers from the stream is the best known set of servers to use.
-		set = newAddrSet()
+		// Collect addresses from from the stream.
+		streamAddrs := []Addr{}
 		for _, srv := range resp.Servers {
 			addr, err := w.nodeToAddrFn(srv.Id, srv.Address)
 			if err != nil {
@@ -546,27 +524,32 @@ func (w *Watcher) watchStream() (*addrSet, error) {
 				w.log.Warn("failed to parse server address from watch stream", "error", err)
 				continue
 			}
-			set.Put(OK, addr)
+			streamAddrs = append(streamAddrs, addr)
 		}
+
+		// Update the addrSet. This sets the lastUpdated timestamp for each address,
+		// and removes servers not present in the server watch stream.
+		addrs.SetAddrs(streamAddrs...)
+		w.log.Debug("updated known Consul servers from watch stream", "addresses", addrs.Sorted())
 	}
 }
 
 // watchSleep is used when the server watch stream is not supported.
 // It may be interrupted if we are told to switch servers.
-func (w *Watcher) watchSleep() (*addrSet, error) {
+func (w *Watcher) watchSleep() error {
 	w.log.Debug("Watcher.watchSleep", "interval", w.config.ServerWatchDisabledInterval)
 
 	for {
 		select {
 		case <-w.ctxForSwitch.Done():
-			return nil, w.ctxForSwitch.Err()
+			return w.ctxForSwitch.Err()
 		case <-time.After(w.config.ServerWatchDisabledInterval):
 		}
 
 		// is the server still OK?
 		_, err := w.getDataplaneFeatures()
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 }
