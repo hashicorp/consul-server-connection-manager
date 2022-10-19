@@ -22,4 +22,8 @@ var Gauges = []prometheus.GaugeDefinition{
 		Name: []string{"consul_connected"},
 		Help: "This will either be 0 or 1 depending on whether the dataplane is currently connected to a Consul server.",
 	},
+	{
+		Name: []string{"connection_errors"},
+		Help: "This will track the number of errors encountered during the stream connection",
+	},
 }
