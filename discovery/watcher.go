@@ -89,16 +89,12 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 		log = hclog.NewNullLogger()
 	}
 
-	// TODO: config for backoff values
-	backoff := backoff.NewExponentialBackOff()
-	backoff.MaxElapsedTime = 0 // Allow backing off forever.
-
 	config = config.withDefaults()
 
 	w := &Watcher{
 		config:       config,
 		log:          log,
-		backoff:      backoff,
+		backoff:      config.BackOff.getPolicy(),
 		resolver:     newResolver(log),
 		discoverer:   NewNetaddrsDiscoverer(config, log),
 		initComplete: newEvent(),

@@ -4,6 +4,8 @@ import (
 	"crypto/tls"
 	"strings"
 	"time"
+
+	"github.com/cenkalti/backoff/v4"
 )
 
 type ServerEvalFn func(State) bool
@@ -15,7 +17,14 @@ const (
 	CredentialsTypeLogin  CredentialsType = "login"
 )
 
-const DefaultServerWatchDisabledInterval = 1 * time.Minute
+const (
+	DefaultServerWatchDisabledInterval = 1 * time.Minute
+
+	DefaultBackOffInitialInterval     = 500 * time.Millisecond
+	DefaultBackOffMaxInterval         = 60 * time.Second
+	DefaultBackOffMultiplier          = 1.5
+	DefaultBackOffRandomizationFactor = 0.5
+)
 
 type Config struct {
 	// Addresses is a DNS name or exec command for go-netaddrs.
@@ -64,6 +73,8 @@ type Config struct {
 	// verification are enabled.
 	TLS         *tls.Config
 	Credentials Credentials
+
+	BackOff BackOffConfig
 }
 
 func (c Config) withDefaults() Config {
@@ -76,6 +87,8 @@ func (c Config) withDefaults() Config {
 		c.TLS = c.TLS.Clone()
 		c.TLS.ServerName = c.Addresses
 	}
+
+	c.BackOff = c.BackOff.withDefaults()
 
 	return c
 }
@@ -113,6 +126,47 @@ type LoginCredential struct {
 	// Meta is the arbitrary set of key-value pairs to attach to the
 	// token. These are included in the Description field of the token.
 	Meta map[string]string
+}
+
+type BackOffConfig struct {
+	// InitialInterval is initial backoff retry interval for exponential backoff. Default: 500ms.
+	InitialInterval time.Duration
+	// Multiplier is the factor by which the backoff retry interval increases on each subquent
+	// retry. Default: 1.5.
+	Multiplier float64
+	// MaxInterval is the maximum backoff interval for exponential backoff. Default: 60s.
+	MaxInterval time.Duration
+	// RandomizationFactor randomizes the backoff retry interval using the formula:
+	//    RetryInterval * (random value in range [1-RandomizationFactor, 1+RandomizationFactor])
+	// Default: 0.5.
+	RandomizationFactor float64
+}
+
+func (b BackOffConfig) withDefaults() BackOffConfig {
+	if b.InitialInterval == 0 {
+		b.InitialInterval = DefaultBackOffInitialInterval
+	}
+	if b.Multiplier == 0 {
+		b.Multiplier = DefaultBackOffMultiplier
+	}
+	if b.MaxInterval == 0 {
+		b.MaxInterval = DefaultBackOffMaxInterval
+	}
+	if b.RandomizationFactor == 0 {
+		b.RandomizationFactor = DefaultBackOffRandomizationFactor
+	}
+	return b
+}
+
+func (b BackOffConfig) getPolicy() backoff.BackOff {
+	result := backoff.NewExponentialBackOff()
+	result.InitialInterval = b.InitialInterval
+	result.MaxInterval = b.MaxInterval
+	result.Multiplier = b.Multiplier
+	result.RandomizationFactor = b.RandomizationFactor
+	// Backoff forever.
+	result.MaxElapsedTime = 0
+	return result
 }
 
 // SupportsDataplaneFeatures returns a ServerEvalFn that selects Consul servers
