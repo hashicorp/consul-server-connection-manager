@@ -3,14 +3,9 @@ package discovery
 import (
 	"fmt"
 	"net"
+	"sort"
 	"sync"
-)
-
-type addrStatus bool
-
-const (
-	OK    addrStatus = true
-	NotOK addrStatus = false
+	"time"
 )
 
 type Addr struct {
@@ -35,49 +30,125 @@ func (a Addr) Empty() bool {
 	return len(a.TCPAddr.IP) == 0
 }
 
+// addrSet represents a set of addresses. For each address it can track the
+// last time the address was attempted and the last time the address was
+// "updated" (inserted into the set).
 type addrSet struct {
 	sync.Mutex
-
-	data map[string]addrWithStatus
+	data map[string]*addrWithStatus
 }
 
 type addrWithStatus struct {
 	Addr
-	addrStatus
+	// lastAttempt is the last time the address was ever attempted. This field
+	// is generally preserved by the addrSet.
+	lastAttempt time.Time
+	// lastUpdate is the last time the address was inserted to the addrSet. This
+	// is set when the addrSet is first constructed, and when calling SetAddrs.
+	lastUpdate time.Time
 }
 
-func newAddrSet() *addrSet {
-	return &addrSet{data: map[string]addrWithStatus{}}
+// unattempted returns whether the address has been attempted since the last update.
+func (a *addrWithStatus) unattempted() bool {
+	return a.lastAttempt.IsZero() || a.lastAttempt.Before(a.lastUpdate)
 }
 
-func (s *addrSet) Put(status addrStatus, addrs ...Addr) {
-	s.Lock()
-	defer s.Unlock()
+func newAddrSet(addrs ...Addr) *addrSet {
+	a := &addrSet{data: map[string]*addrWithStatus{}}
+	a.putNoLock(addrs...)
+	return a
+}
 
+func (s *addrSet) putNoLock(addrs ...Addr) {
 	for _, addr := range addrs {
-		s.data[addr.String()] = addrWithStatus{addr, status}
+		val, ok := s.data[addr.String()]
+		if !ok {
+			val = &addrWithStatus{Addr: addr}
+		}
+		// preserve lastAttempt
+		val.lastUpdate = time.Now()
+		s.data[addr.String()] = val
 	}
 }
 
-func (s *addrSet) Get(match addrStatus) []Addr {
+// SetAddrs replaces the existing addresses in this set with the given
+// addresses. This preserves the lastAttempt timestamp for any of the given
+// addresses that are already in the set. It sets lastUpdate to the current
+// time for each address.
+//
+// After calling this function, each address is considered unattempted until
+// the next call to SetAttemptTime.
+func (s *addrSet) SetAddrs(addrs ...Addr) {
 	s.Lock()
 	defer s.Unlock()
 
-	var result []Addr
-	for _, a := range s.data {
-		if a.addrStatus == match {
-			result = append(result, a.Addr)
+	old := s.data
+
+	s.data = map[string]*addrWithStatus{}
+	s.putNoLock(addrs...)
+
+	// preserve lastAttempt timestamps
+	for _, oldVal := range old {
+		if newVal, ok := s.data[oldVal.String()]; ok {
+			newVal.lastAttempt = oldVal.lastAttempt
 		}
 	}
+}
+
+func (s *addrSet) AllAttempted() bool {
+	if s == nil {
+		// no addrs, so all attempted
+		return true
+	}
+	s.Lock()
+	defer s.Unlock()
+
+	for _, a := range s.data {
+		if a.unattempted() {
+			return false
+		}
+	}
+	return true
+}
+
+// Sorted returns an ordered list of addresses. This sorts first by moving
+// unattempted addresses to the front, and then by the lastAttempt timestamp.
+func (s *addrSet) Sorted() []Addr {
+	if s == nil {
+		return nil
+	}
+	s.Lock()
+	defer s.Unlock()
+
+	result := make([]Addr, 0, len(s.data))
+	for _, a := range s.data {
+		result = append(result, a.Addr)
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		a := s.data[result[i].String()]
+		b := s.data[result[j].String()]
+
+		// Sort unattempted addresses to the front.
+		if a.unattempted() != b.unattempted() {
+			// If a != b then there are two cases:
+			//   a=true   b=false  --> return true
+			//   a=false  b=true   --> return false
+			// Which simplifies to "return a"
+			return a.unattempted()
+		}
+		// Otherwise, sort by lastAttempt.
+		return a.lastAttempt.Before(b.lastAttempt)
+
+	})
 	return result
 }
 
-func (s *addrSet) Status(addr Addr) addrStatus {
+func (s *addrSet) SetAttemptTime(addr Addr) {
 	s.Lock()
 	defer s.Unlock()
 
-	state, ok := s.data[addr.String()]
-	return addrStatus(ok && bool(state.addrStatus))
+	s.data[addr.String()].lastAttempt = time.Now()
 }
 
 func (s *addrSet) String() string {

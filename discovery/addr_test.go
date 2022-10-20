@@ -33,29 +33,58 @@ func TestAddrEmpty(t *testing.T) {
 	require.False(t, a.Empty())
 }
 
-func TestAddrSet(t *testing.T) {
-	addrs := []Addr{}
-
-	for i := 0; i < 6; i++ {
-		a, err := MakeAddr("127.0.0.1", i)
-		require.NoError(t, err)
-		addrs = append(addrs, a)
+func TestAddrSetSort(t *testing.T) {
+	addrs := []Addr{
+		mustMakeAddr(t, "127.0.0.1", 1),
+		mustMakeAddr(t, "127.0.0.1", 2),
+		mustMakeAddr(t, "127.0.0.1", 3),
 	}
 
-	set := newAddrSet()
+	set := newAddrSet(addrs...)
 
-	require.Len(t, set.Get(OK), 0)
-	require.Len(t, set.Get(NotOK), 0)
+	// match in any order.
+	require.ElementsMatch(t, addrs, set.Sorted())
 
-	set.Put(OK, addrs...)
-	require.Len(t, set.Get(OK), len(addrs))
-	require.Len(t, set.Get(NotOK), 0)
+	// record the last attempt time.
+	set.SetAttemptTime(addrs[1])
+	sorted := set.Sorted()
+	require.ElementsMatch(t, addrs, sorted)
+	require.Equal(t, addrs[1], sorted[2]) // last attempted address at the end
 
-	set.Put(NotOK, addrs[:3]...)
-	require.Len(t, set.Get(OK), 3)
-	require.Len(t, set.Get(NotOK), 3)
+	set.SetAttemptTime(addrs[0])
+	require.Equal(t, []Addr{addrs[2], addrs[1], addrs[0]}, set.Sorted())
 
-	set.Put(NotOK, addrs...)
-	require.Len(t, set.Get(OK), 0)
-	require.Len(t, set.Get(NotOK), 6)
+	set.SetAttemptTime(addrs[2])
+	require.Equal(t, []Addr{addrs[1], addrs[0], addrs[2]}, set.Sorted())
+
+	// Try some other order
+	set.SetAttemptTime(addrs[0])
+	set.SetAttemptTime(addrs[2])
+	set.SetAttemptTime(addrs[1])
+	require.Equal(t, []Addr{addrs[0], addrs[2], addrs[1]}, set.Sorted())
+
+	// Set the lastUpdate time. The lastAttempt timestamp should be preserved,
+	// and the should sort in the same order as prior to Update.
+	set.SetAddrs(addrs...)
+	require.Equal(t, []Addr{addrs[0], addrs[2], addrs[1]}, set.Sorted())
+}
+
+func TestAddrSetAllAttempted(t *testing.T) {
+	var set *addrSet
+	require.True(t, set.AllAttempted())
+
+	addrs := []Addr{
+		mustMakeAddr(t, "127.0.0.1", 1),
+		mustMakeAddr(t, "127.0.0.1", 2),
+		mustMakeAddr(t, "127.0.0.1", 3),
+	}
+
+	set = newAddrSet(addrs...)
+	require.False(t, set.AllAttempted())
+	set.SetAttemptTime(addrs[2])
+	require.False(t, set.AllAttempted())
+	set.SetAttemptTime(addrs[1])
+	require.False(t, set.AllAttempted())
+	set.SetAttemptTime(addrs[0])
+	require.True(t, set.AllAttempted())
 }
