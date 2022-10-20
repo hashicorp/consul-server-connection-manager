@@ -62,9 +62,8 @@ type Watcher struct {
 	runComplete  *event
 	runOnce      sync.Once
 
-	backoff backoff.BackOff
-	conn    *grpc.ClientConn
-	token   atomic.Value
+	conn  *grpc.ClientConn
+	token atomic.Value
 
 	resolver *watcherResolver
 	balancer *watcherBalancer
@@ -97,7 +96,6 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 	w := &Watcher{
 		config:       config,
 		log:          log,
-		backoff:      config.BackOff.getPolicy(),
 		resolver:     newResolver(log),
 		discoverer:   NewNetaddrsDiscoverer(config, log),
 		initComplete: newEvent(),
@@ -185,7 +183,10 @@ func (w *Watcher) notifySubscribers() {
 //	go w.Run()
 //	state, err := w.State()
 func (w *Watcher) Run() {
-	w.runOnce.Do(w.run)
+	w.runOnce.Do(func() {
+		defer w.runComplete.SetDone()
+		w.run(w.config.BackOff.getPolicy(), w.nextServer)
+	})
 }
 
 // State returns the current state. This blocks for initialization to complete,
@@ -239,31 +240,32 @@ func (w *Watcher) Stop() {
 	w.conn.Close()
 }
 
-func (w *Watcher) run() {
-	defer w.runComplete.SetDone()
-
+func (w *Watcher) run(bo backoff.BackOff, nextServer func(*addrSet) error) {
 	// addrs is the current set of servers we know about.
 	addrs := newAddrSet()
-	var err error
 
 	for {
+		resetTime := w.clock.Now().Add(w.config.BackOff.ResetInterval)
+
 		// Find and connect to a server.
 		//
-		// When this successfully connects to a server, it returns the chosen
-		// server and the latest set of server addresses. If we get an error,
-		// then we retry with backoff.
+		// nextServer picks a server and tries to connect to it. It blocks
+		// while connected to the server. It always returns an error on failure
+		// or when disconnected.
 		metrics.SetGauge([]string{"consul_connected"}, 0)
-		err = w.nextServer(addrs)
+		err := nextServer(addrs)
 		if err != nil {
 			w.log.Error("run", "err", err.Error())
 		}
 		metrics.SetGauge([]string{"consul_connected"}, 0)
 
+		// Reset the backoff if nextServer took longer than the reset interval.
+		if w.clock.Now().After(resetTime) {
+			bo.Reset()
+		}
+
 		// Retry with backoff.
-		//
-		// TODO: If we are in an good state (no errors) for long enough, reset
-		// the backoff so we aren't stuck with a long backoff interval forever.
-		duration := w.backoff.NextBackOff()
+		duration := bo.NextBackOff()
 		if duration == backoff.Stop {
 			// We should not hit this since we set MaxElapsedTime = 0.
 			w.log.Warn("backoff stopped; aborting")
