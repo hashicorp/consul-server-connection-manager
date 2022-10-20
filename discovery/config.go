@@ -24,6 +24,7 @@ const (
 	DefaultBackOffMaxInterval         = 60 * time.Second
 	DefaultBackOffMultiplier          = 1.5
 	DefaultBackOffRandomizationFactor = 0.5
+	DefaultBackOffResetInterval       = 3 * DefaultBackOffMaxInterval
 )
 
 type Config struct {
@@ -134,12 +135,15 @@ type BackOffConfig struct {
 	// Multiplier is the factor by which the backoff retry interval increases on each subquent
 	// retry. Default: 1.5.
 	Multiplier float64
-	// MaxInterval is the maximum backoff interval for exponential backoff. Default: 60s.
+	// MaxInterval is the maximum backoff interval for exponential backoff. Default: 1m.
 	MaxInterval time.Duration
 	// RandomizationFactor randomizes the backoff retry interval using the formula:
 	//    RetryInterval * (random value in range [1-RandomizationFactor, 1+RandomizationFactor])
 	// Default: 0.5.
 	RandomizationFactor float64
+	// ResetInterval determines how long before resetting the backoff policy, If we are in a good
+	// state for at least this interval, then exponential backoff is reset. Default: 3m.
+	ResetInterval time.Duration
 }
 
 func (b BackOffConfig) withDefaults() BackOffConfig {
@@ -154,6 +158,9 @@ func (b BackOffConfig) withDefaults() BackOffConfig {
 	}
 	if b.RandomizationFactor == 0 {
 		b.RandomizationFactor = DefaultBackOffRandomizationFactor
+	}
+	if b.ResetInterval == 0 {
+		b.ResetInterval = DefaultBackOffResetInterval
 	}
 	return b
 }

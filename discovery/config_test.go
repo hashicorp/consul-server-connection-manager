@@ -19,6 +19,7 @@ func TestConfigDefaults(t *testing.T) {
 				Multiplier:          DefaultBackOffMultiplier,
 				MaxInterval:         DefaultBackOffMaxInterval,
 				RandomizationFactor: DefaultBackOffRandomizationFactor,
+				ResetInterval:       DefaultBackOffResetInterval,
 			},
 		}
 	}
@@ -48,6 +49,7 @@ func TestConfigDefaults(t *testing.T) {
 					Multiplier:          2,
 					MaxInterval:         3,
 					RandomizationFactor: 4,
+					ResetInterval:       5,
 				},
 			},
 			expCfgFn: func(c Config) Config {
@@ -55,6 +57,7 @@ func TestConfigDefaults(t *testing.T) {
 				c.BackOff.Multiplier = 2
 				c.BackOff.MaxInterval = 3
 				c.BackOff.RandomizationFactor = 4
+				c.BackOff.ResetInterval = 5
 				return c
 			},
 		},
