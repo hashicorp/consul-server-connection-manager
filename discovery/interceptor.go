@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 
+	"github.com/armon/go-metrics"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -86,11 +87,13 @@ func interceptError(watcher *Watcher, err error) {
 	if err == nil {
 		return
 	}
+	metrics.SetGauge([]string{"connection_errors"}, float32(1))
 
 	s, ok := status.FromError(err)
 	if !ok {
 		return
 	}
+	metrics.SetGaugeWithLabels([]string{"connection_errors"}, float32(1), []metrics.Label{{Name: "error_code", Value: s.Code().String()}})
 
 	if s.Code() == codes.ResourceExhausted {
 		watcher.log.Debug("saw gRPC ResourceExhausted status code")
