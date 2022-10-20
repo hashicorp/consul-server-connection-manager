@@ -69,14 +69,17 @@ type Watcher struct {
 	resolver *watcherResolver
 	balancer *watcherBalancer
 
+	acls *ACLs
+
+	subcribers []chan State
+
+	// Swappable types for tests
 	// interface to inject custom server ports for tests
 	discoverer Discoverer
 	// function to inject custom server ports for tests
 	nodeToAddrFn func(nodeID, addr string) (Addr, error)
-
-	acls *ACLs
-
-	subcribers []chan State
+	// mock the current time
+	clock Clock
 }
 
 type serverState struct {
@@ -102,6 +105,7 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 		nodeToAddrFn: func(_, addr string) (Addr, error) {
 			return MakeAddr(addr, config.GRPCPort)
 		},
+		clock: &SystemClock{},
 	}
 	w.ctx, w.ctxCancel = context.WithCancel(ctx)
 	w.currentServer.Store(serverState{})
@@ -269,18 +273,24 @@ func (w *Watcher) run() {
 		case <-w.ctx.Done():
 			w.log.Warn("aborting", "err", w.ctx.Err())
 			return
-		case <-time.After(duration):
+		case <-w.clock.After(duration):
 		}
 	}
 }
 
+// nextServer does everything necessary to find and connects to a server.
+// It runs discovery, selects a server, connects to it, and then blocks
+// while it is connected, watching for server set changes.
+//
+// nextServer returns on any error, such as failure to connect or upon being
+// disconnected for any reason. It should always return with a non-nil erorr.
 func (w *Watcher) nextServer(addrs *addrSet) error {
 	w.log.Debug("Watcher.nextServer", "addrs", addrs.String())
 
 	w.switchLock.Lock()
 	w.ctxForSwitch, w.cancelForSwitch = context.WithCancel(w.ctx)
 	w.switchLock.Unlock()
-	start := time.Now()
+	start := w.clock.Now()
 
 	defer func() {
 		// If we return without picking a server, then clear the gRPC connection's
@@ -539,7 +549,7 @@ func (w *Watcher) watchSleep() error {
 		select {
 		case <-w.ctxForSwitch.Done():
 			return w.ctxForSwitch.Err()
-		case <-time.After(w.config.ServerWatchDisabledInterval):
+		case <-w.clock.After(w.config.ServerWatchDisabledInterval):
 		}
 
 		// is the server still OK?

@@ -35,7 +35,8 @@ func (a Addr) Empty() bool {
 // "updated" (inserted into the set).
 type addrSet struct {
 	sync.Mutex
-	data map[string]*addrWithStatus
+	data  map[string]*addrWithStatus
+	clock Clock
 }
 
 type addrWithStatus struct {
@@ -54,7 +55,10 @@ func (a *addrWithStatus) unattempted() bool {
 }
 
 func newAddrSet(addrs ...Addr) *addrSet {
-	a := &addrSet{data: map[string]*addrWithStatus{}}
+	a := &addrSet{
+		data:  map[string]*addrWithStatus{},
+		clock: &SystemClock{},
+	}
 	a.putNoLock(addrs...)
 	return a
 }
@@ -66,7 +70,7 @@ func (s *addrSet) putNoLock(addrs ...Addr) {
 			val = &addrWithStatus{Addr: addr}
 		}
 		// preserve lastAttempt
-		val.lastUpdate = time.Now()
+		val.lastUpdate = s.clock.Now()
 		s.data[addr.String()] = val
 	}
 }
@@ -148,7 +152,7 @@ func (s *addrSet) SetAttemptTime(addr Addr) {
 	s.Lock()
 	defer s.Unlock()
 
-	s.data[addr.String()].lastAttempt = time.Now()
+	s.data[addr.String()].lastAttempt = s.clock.Now()
 }
 
 func (s *addrSet) String() string {

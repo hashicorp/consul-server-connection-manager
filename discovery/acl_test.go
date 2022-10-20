@@ -123,5 +123,5 @@ func (a ACLMockFixture) SetupClientMock(t *testing.T) *ACLs {
 	if a.ExpLogoutRequest != nil {
 		client.Mock.On("Logout", ctx, a.ExpLogoutRequest).Return(a.LogoutResponse, a.LogoutErr)
 	}
-	return &ACLs{client: client, cfg: a.Config}
+	return &ACLs{client: client, cfg: a.Config, clock: &mockClock{}}
 }

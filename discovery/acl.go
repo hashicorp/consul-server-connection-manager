@@ -16,12 +16,14 @@ type ACLs struct {
 
 	// remember this for logout.
 	token *pbacl.LoginToken
+	clock Clock
 }
 
 func newACLs(conn grpc.ClientConnInterface, config Config) *ACLs {
 	return &ACLs{
 		client: pbacl.NewACLServiceClient(conn),
 		cfg:    config.Credentials.Login,
+		clock:  &SystemClock{},
 	}
 }
 
@@ -40,7 +42,7 @@ func (a *ACLs) Login(ctx context.Context) (string, error) {
 		Partition:   a.cfg.Partition,
 		Datacenter:  a.cfg.Datacenter,
 	}
-	start := time.Now()
+	start := a.clock.Now()
 	resp, err := a.client.Login(ctx, req)
 	if err != nil {
 		return "", err
@@ -56,7 +58,7 @@ func (a *ACLs) Login(ctx context.Context) (string, error) {
 	// https://github.com/hashicorp/consul-k8s/pull/887
 	//
 	// A short sleep should mitigate some cases of the problem until we address this properly.
-	time.Sleep(100 * time.Millisecond)
+	a.clock.Sleep(100 * time.Millisecond)
 	return a.token.SecretId, nil
 }
 
