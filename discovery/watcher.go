@@ -280,7 +280,7 @@ func (w *Watcher) run(bo backoff.BackOff, nextServer func(*addrSet) error) {
 	}
 }
 
-// nextServer does everything necessary to find and connects to a server.
+// nextServer does everything necessary to find and connect to a server.
 // It runs discovery, selects a server, connects to it, and then blocks
 // while it is connected, watching for server set changes.
 //

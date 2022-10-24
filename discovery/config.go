@@ -132,7 +132,7 @@ type LoginCredential struct {
 type BackOffConfig struct {
 	// InitialInterval is initial backoff retry interval for exponential backoff. Default: 500ms.
 	InitialInterval time.Duration
-	// Multiplier is the factor by which the backoff retry interval increases on each subquent
+	// Multiplier is the factor by which the backoff retry interval increases on each subsequent
 	// retry. Default: 1.5.
 	Multiplier float64
 	// MaxInterval is the maximum backoff interval for exponential backoff. Default: 1m.
