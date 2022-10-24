@@ -78,7 +78,7 @@ type Watcher struct {
 	// nodeToAddrFn parses and returns the address for the given Consul node
 	// ID. In tets, we use this to inject custom server ports.
 	nodeToAddrFn func(nodeID, addr string) (Addr, error)
-	// clock wraps the time functions. Mocking this enables us to control time
+	// clock provides time functions. Mocking this enables us to control time
 	// for unit tests.
 	clock Clock
 }
