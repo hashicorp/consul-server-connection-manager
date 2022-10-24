@@ -8,10 +8,11 @@ import (
 type mockClock struct {
 	sync.Mutex
 
-	t time.Time
+	currentTime time.Time
 
-	// this stores
-	afterChans map[time.Time]chan time.Time
+	// afterChans stores channels in order to mimic time.After. Each channnel
+	// is stores with the timestamp when the channel should return.
+	afterChans map[chan time.Time]time.Time
 }
 
 var _ Clock = (*mockClock)(nil)
@@ -24,13 +25,12 @@ func (f *mockClock) After(d time.Duration) <-chan time.Time {
 	ch := make(chan time.Time, 1)
 	if d == 0 {
 		// Channel will immediately return on 0 duration.
-		ch <- f.t
+		ch <- f.currentTime
 		close(ch)
 		return ch
 	} else {
 		// Otherwise, handle the send at the next Tick
-		end := f.t.Add(d)
-		f.afterChans[end] = ch
+		f.afterChans[ch] = f.currentTime.Add(d)
 	}
 	return ch
 }
@@ -39,26 +39,26 @@ func (f *mockClock) Now() time.Time {
 	f.Lock()
 	defer f.Unlock()
 
-	return f.t
+	return f.currentTime
 }
 
 func (f *mockClock) Sleep(d time.Duration) {
 	f.Lock()
 	defer f.Unlock()
 
-	f.t = f.t.Add(d)
+	f.currentTime = f.currentTime.Add(d)
 
 	// Send to channels returned by After()
-	for end, ch := range f.afterChans {
-		if f.t.After(end) {
+	for ch, end := range f.afterChans {
+		if f.currentTime.After(end) {
 			// non-blocking send
 			select {
-			case ch <- f.t:
+			case ch <- f.currentTime:
 			default:
 			}
 
 			close(ch)
-			delete(f.afterChans, end)
+			delete(f.afterChans, ch)
 		}
 	}
 }

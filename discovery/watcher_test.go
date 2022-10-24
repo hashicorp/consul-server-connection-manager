@@ -192,7 +192,7 @@ func TestRun(t *testing.T) {
 
 func TestWatcherBackoffReset(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	t.Cleanup(cancel)
 
 	clock := &mockClock{}
 	bo := &fakeBackOff{}
@@ -234,7 +234,7 @@ func TestWatcherBackoffReset(t *testing.T) {
 		ev := testEvents[nextServerCount]
 		require.Equal(t, ev.expBackOffResets, bo.resetCount)
 		clock.Sleep(ev.tick)
-		t.Logf("t=%v : tick %s, resets %d", clock.t, ev.tick, bo.resetCount)
+		t.Logf("t=%v : tick %s, resets %d", clock.Now(), ev.tick, bo.resetCount)
 
 		nextServerCount++
 

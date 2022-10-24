@@ -72,12 +72,14 @@ type Watcher struct {
 
 	subcribers []chan State
 
-	// Swappable types for tests
-	// interface to inject custom server ports for tests
+	// discoverer discovers IP addresses. In tests, we use mock this interface
+	// to inject custom server ports.
 	discoverer Discoverer
-	// function to inject custom server ports for tests
+	// nodeToAddrFn parses and returns the address for the given Consul node
+	// ID. In tets, we use this to inject custom server ports.
 	nodeToAddrFn func(nodeID, addr string) (Addr, error)
-	// mock the current time
+	// clock wraps the time functions. Mocking this enables us to control time
+	// for unit tests.
 	clock Clock
 }
 
