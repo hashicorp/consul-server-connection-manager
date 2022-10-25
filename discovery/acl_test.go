@@ -18,6 +18,7 @@ func TestACLLoginLogout(t *testing.T) {
 		},
 		"login error": func(a ACLMockFixture) ACLMockFixture {
 			a.LoginErr = fmt.Errorf("mock login error")
+			a.LogoutErr = ErrAlreadyLoggedOut
 			// no logout request is be made if login failed (no token)
 			a.ExpLogoutRequest = nil
 			return a
@@ -35,13 +36,15 @@ func TestACLLoginLogout(t *testing.T) {
 			ctx := context.Background()
 
 			// Test Login.
-			tok, err := acls.Login(ctx)
+			accessor, secret, err := acls.Login(ctx)
 			if fixture.LoginErr != nil {
 				require.Equal(t, fixture.LoginErr, err)
-				require.Equal(t, tok, "")
+				require.Equal(t, accessor, "")
+				require.Equal(t, secret, "")
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, "test-secret", tok)
+				require.Equal(t, "test-accessor", accessor)
+				require.Equal(t, "test-secret", secret)
 				require.NotNil(t, acls.token)
 			}
 

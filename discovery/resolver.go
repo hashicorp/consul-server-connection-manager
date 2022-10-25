@@ -54,7 +54,7 @@ func (r *watcherResolver) SetAddress(addr Addr) error {
 	// support updating this to an empty list of addresses.
 	err := r.cc.UpdateState(resolver.State{Addresses: addrs})
 	if err != nil {
-		r.log.Error("update client conn state", "err", err)
+		r.log.Debug("gRPC resolver failed to update connection address", "error", err)
 		return err
 	}
 	return nil

@@ -45,7 +45,7 @@ func (b *balancerBuilder) Name() string {
 // Since we grpc.Dial one time in the Watcher, this is called only the first time a sub-connection
 // needs to be created (so after the resolver first sets an address on the connection).
 func (b *balancerBuilder) Build(cc balancer.ClientConn, opt balancer.BuildOptions) balancer.Balancer {
-	b.log.Debug("balancerBuilder.Build")
+	b.log.Trace("balancerBuilder.Build")
 
 	blr := &watcherBalancer{
 		log: b.log,
