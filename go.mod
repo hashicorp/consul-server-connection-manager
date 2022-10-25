@@ -1,6 +1,6 @@
 module github.com/hashicorp/consul-server-connection-manager
 
-go 1.18
+go 1.19
 
 require (
 	github.com/armon/go-metrics v0.4.1
@@ -9,7 +9,7 @@ require (
 	github.com/hashicorp/consul/proto-public v0.1.0
 	github.com/hashicorp/consul/sdk v0.11.0
 	github.com/hashicorp/go-hclog v1.2.2
-	github.com/hashicorp/go-netaddrs v0.0.0-20220509001840-90ed9d26ec46
+	github.com/hashicorp/go-netaddrs v0.1.0
 	github.com/stretchr/testify v1.7.2
 	google.golang.org/grpc v1.48.0
 )

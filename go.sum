@@ -89,8 +89,8 @@ github.com/hashicorp/go-hclog v1.2.2 h1:ihRI7YFwcZdiSD7SIenIhHfQH3OuDvWerAUBZbeQ
 github.com/hashicorp/go-hclog v1.2.2/go.mod h1:W4Qnvbt70Wk/zYJryRzDRU/4r0kIg0PVHBcfoyhpF5M=
 github.com/hashicorp/go-immutable-radix v1.0.0 h1:AKDB1HM5PWEA7i4nhcpwOrO2byshxBjXVn/J/3+z5/0=
 github.com/hashicorp/go-immutable-radix v1.0.0/go.mod h1:0y9vanUI8NX6FsYoO3zeMjhV/C5i9g4Q3DwcSNZ4P60=
-github.com/hashicorp/go-netaddrs v0.0.0-20220509001840-90ed9d26ec46 h1:BysEAd6g+0HNJ0v99u7KbSObjzxC7rfVQ6yVx6HxrvU=
-github.com/hashicorp/go-netaddrs v0.0.0-20220509001840-90ed9d26ec46/go.mod h1:TjKbv4FhIra0YJ82mws5+4QXOhzv09eAWs4jtOBI4IU=
+github.com/hashicorp/go-netaddrs v0.1.0 h1:TnlYvODD4C/wO+j7cX1z69kV5gOzI87u3OcUinANaW8=
+github.com/hashicorp/go-netaddrs v0.1.0/go.mod h1:33+a/emi5R5dqRspOuZKO0E+Tuz5WV1F84eRWALkedA=
 github.com/hashicorp/go-retryablehttp v0.5.3/go.mod h1:9B5zBasrRhHXnJnui7y6sL7es7NDiJgTc6Er0maI1Xs=
 github.com/hashicorp/go-uuid v1.0.0/go.mod h1:6SBZvOh/SIDV7/2o3Jml5SYk/TvGqwFJ/bN7x4byOro=
 github.com/hashicorp/go-uuid v1.0.1 h1:fv1ep09latC32wFoVwnqcnKJGnMSdBanPczbHAYm1BE=
