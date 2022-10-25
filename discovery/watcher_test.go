@@ -2,11 +2,13 @@ package discovery
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/hashicorp/consul/proto-public/pbdataplane"
 	"github.com/hashicorp/consul/proto-public/pbserverdiscovery"
 	"github.com/hashicorp/consul/sdk/testutil"
@@ -186,6 +188,77 @@ func TestRun(t *testing.T) {
 			t.Logf("test successful")
 		})
 	}
+}
+
+func TestWatcherBackoffReset(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+
+	clock := &mockClock{}
+	bo := &fakeBackOff{}
+
+	watcher := &Watcher{
+		ctx:       ctx,
+		ctxCancel: cancel,
+		config: Config{
+			BackOff: BackOffConfig{
+				ResetInterval: 10 * time.Second,
+			},
+		},
+		log:   hclog.NewNullLogger(),
+		clock: clock,
+	}
+
+	testEvents := []struct {
+		tick time.Duration
+		// note that backoff is reset following the call to nextServer
+		expBackOffResets int
+	}{
+		// ResetInterval is 10s.
+		{1 * time.Second, 0},          // 1s <= 10s: BackOff not reset
+		{9999 * time.Millisecond, 0},  // 9999ms <= 10s: BackOff not reset
+		{10001 * time.Millisecond, 0}, // 10001ms > 10s: BackOff will be reset
+		{1 * time.Second, 1},          // 1s <= 10s: BackOff not reset
+		{10 * time.Second, 1},         // 10s <= 10s: BackOff not reset
+		{11 * time.Second, 1},         // 11s > 10s: BackOff will be reset
+		{0 * time.Second, 2},
+	}
+
+	nextServerCount := 0
+	fakeNextServer := func(*addrSet) error {
+		if nextServerCount >= len(testEvents) {
+			cancel()
+			return fmt.Errorf("test over")
+		}
+
+		ev := testEvents[nextServerCount]
+		require.Equal(t, ev.expBackOffResets, bo.resetCount)
+		clock.Sleep(ev.tick)
+		t.Logf("t=%v : tick %s, resets %d", clock.Now(), ev.tick, bo.resetCount)
+
+		nextServerCount++
+
+		// we don't condition backoff reset on errors.
+		return errors.New("next server error")
+	}
+
+	watcher.run(bo, fakeNextServer)
+	// make sure fakeNextServer was called the correct number of times.
+	require.Equal(t, nextServerCount, len(testEvents))
+}
+
+type fakeBackOff struct {
+	resetCount int
+}
+
+var _ backoff.BackOff = (*fakeBackOff)(nil)
+
+func (f *fakeBackOff) NextBackOff() time.Duration {
+	return 0
+}
+
+func (f *fakeBackOff) Reset() {
+	f.resetCount++
 }
 
 func receiveSubscribeState(t *testing.T, ctx context.Context, ch <-chan State) State {

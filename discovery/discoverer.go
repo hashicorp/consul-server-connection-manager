@@ -3,7 +3,6 @@ package discovery
 import (
 	"context"
 	"net"
-	"time"
 
 	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-hclog"
@@ -17,17 +16,19 @@ type Discoverer interface {
 type NetaddrsDiscoverer struct {
 	config Config
 	log    hclog.Logger
+	clock  Clock
 }
 
 func NewNetaddrsDiscoverer(config Config, log hclog.Logger) *NetaddrsDiscoverer {
 	return &NetaddrsDiscoverer{
 		config: config,
 		log:    log,
+		clock:  &SystemClock{},
 	}
 }
 
 func (n *NetaddrsDiscoverer) Discover(ctx context.Context) ([]Addr, error) {
-	start := time.Now()
+	start := n.clock.Now()
 	addrs, err := netaddrs.IPAddrs(ctx, n.config.Addresses, n.log)
 	if err != nil {
 		n.log.Error("discovering server addresses", "err", err)

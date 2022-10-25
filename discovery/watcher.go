@@ -62,21 +62,25 @@ type Watcher struct {
 	runComplete  *event
 	runOnce      sync.Once
 
-	backoff backoff.BackOff
-	conn    *grpc.ClientConn
-	token   atomic.Value
+	conn  *grpc.ClientConn
+	token atomic.Value
 
 	resolver *watcherResolver
 	balancer *watcherBalancer
 
-	// interface to inject custom server ports for tests
-	discoverer Discoverer
-	// function to inject custom server ports for tests
-	nodeToAddrFn func(nodeID, addr string) (Addr, error)
-
 	acls *ACLs
 
 	subcribers []chan State
+
+	// discoverer discovers IP addresses. In tests, we use mock this interface
+	// to inject custom server ports.
+	discoverer Discoverer
+	// nodeToAddrFn parses and returns the address for the given Consul node
+	// ID. In tets, we use this to inject custom server ports.
+	nodeToAddrFn func(nodeID, addr string) (Addr, error)
+	// clock provides time functions. Mocking this enables us to control time
+	// for unit tests.
+	clock Clock
 }
 
 type serverState struct {
@@ -89,16 +93,11 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 		log = hclog.NewNullLogger()
 	}
 
-	// TODO: config for backoff values
-	backoff := backoff.NewExponentialBackOff()
-	backoff.MaxElapsedTime = 0 // Allow backing off forever.
-
 	config = config.withDefaults()
 
 	w := &Watcher{
 		config:       config,
 		log:          log,
-		backoff:      backoff,
 		resolver:     newResolver(log),
 		discoverer:   NewNetaddrsDiscoverer(config, log),
 		initComplete: newEvent(),
@@ -106,6 +105,7 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 		nodeToAddrFn: func(_, addr string) (Addr, error) {
 			return MakeAddr(addr, config.GRPCPort)
 		},
+		clock: &SystemClock{},
 	}
 	w.ctx, w.ctxCancel = context.WithCancel(ctx)
 	w.currentServer.Store(serverState{})
@@ -185,7 +185,10 @@ func (w *Watcher) notifySubscribers() {
 //	go w.Run()
 //	state, err := w.State()
 func (w *Watcher) Run() {
-	w.runOnce.Do(w.run)
+	w.runOnce.Do(func() {
+		defer w.runComplete.SetDone()
+		w.run(w.config.BackOff.getPolicy(), w.nextServer)
+	})
 }
 
 // State returns the current state. This blocks for initialization to complete,
@@ -239,31 +242,32 @@ func (w *Watcher) Stop() {
 	w.conn.Close()
 }
 
-func (w *Watcher) run() {
-	defer w.runComplete.SetDone()
-
+func (w *Watcher) run(bo backoff.BackOff, nextServer func(*addrSet) error) {
 	// addrs is the current set of servers we know about.
 	addrs := newAddrSet()
-	var err error
 
 	for {
+		resetTime := w.clock.Now().Add(w.config.BackOff.ResetInterval)
+
 		// Find and connect to a server.
 		//
-		// When this successfully connects to a server, it returns the chosen
-		// server and the latest set of server addresses. If we get an error,
-		// then we retry with backoff.
+		// nextServer picks a server and tries to connect to it. It blocks
+		// while connected to the server. It always returns an error on failure
+		// or when disconnected.
 		metrics.SetGauge([]string{"consul_connected"}, 0)
-		err = w.nextServer(addrs)
+		err := nextServer(addrs)
 		if err != nil {
 			w.log.Error("run", "err", err.Error())
 		}
 		metrics.SetGauge([]string{"consul_connected"}, 0)
 
+		// Reset the backoff if nextServer took longer than the reset interval.
+		if w.clock.Now().After(resetTime) {
+			bo.Reset()
+		}
+
 		// Retry with backoff.
-		//
-		// TODO: If we are in an good state (no errors) for long enough, reset
-		// the backoff so we aren't stuck with a long backoff interval forever.
-		duration := w.backoff.NextBackOff()
+		duration := bo.NextBackOff()
 		if duration == backoff.Stop {
 			// We should not hit this since we set MaxElapsedTime = 0.
 			w.log.Warn("backoff stopped; aborting")
@@ -273,18 +277,24 @@ func (w *Watcher) run() {
 		case <-w.ctx.Done():
 			w.log.Warn("aborting", "err", w.ctx.Err())
 			return
-		case <-time.After(duration):
+		case <-w.clock.After(duration):
 		}
 	}
 }
 
+// nextServer does everything necessary to find and connect to a server.
+// It runs discovery, selects a server, connects to it, and then blocks
+// while it is connected, watching for server set changes.
+//
+// nextServer returns on any error, such as failure to connect or upon being
+// disconnected for any reason. It should always return with a non-nil erorr.
 func (w *Watcher) nextServer(addrs *addrSet) error {
 	w.log.Debug("Watcher.nextServer", "addrs", addrs.String())
 
 	w.switchLock.Lock()
 	w.ctxForSwitch, w.cancelForSwitch = context.WithCancel(w.ctx)
 	w.switchLock.Unlock()
-	start := time.Now()
+	start := w.clock.Now()
 
 	defer func() {
 		// If we return without picking a server, then clear the gRPC connection's
@@ -543,7 +553,7 @@ func (w *Watcher) watchSleep() error {
 		select {
 		case <-w.ctxForSwitch.Done():
 			return w.ctxForSwitch.Err()
-		case <-time.After(w.config.ServerWatchDisabledInterval):
+		case <-w.clock.After(w.config.ServerWatchDisabledInterval):
 		}
 
 		// is the server still OK?
