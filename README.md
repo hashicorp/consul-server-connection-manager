@@ -1,6 +1,4 @@
-# WORK IN PROGRESS
-
-This library is still under development and hence subject to breaking changes.
+[![GoDoc](https://pkg.go.dev/badge/github.com/hashicorp/consul-server-connection-manager)](https://pkg.go.dev/github.com/hashicorp/consul-server-connection-manager)
 
 ## Summary
 
