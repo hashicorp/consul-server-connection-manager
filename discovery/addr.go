@@ -26,6 +26,10 @@ func MakeAddr(ipStr string, port int) (Addr, error) {
 	}, nil
 }
 
+func (a Addr) String() string {
+	return a.TCPAddr.String()
+}
+
 func (a Addr) Empty() bool {
 	return len(a.TCPAddr.IP) == 0
 }
@@ -124,6 +128,10 @@ func (s *addrSet) Sorted() []Addr {
 	s.Lock()
 	defer s.Unlock()
 
+	return s.sortNoLock()
+}
+
+func (s *addrSet) sortNoLock() []Addr {
 	result := make([]Addr, 0, len(s.data))
 	for _, a := range s.data {
 		result = append(result, a.Addr)
@@ -162,5 +170,5 @@ func (s *addrSet) String() string {
 	s.Lock()
 	defer s.Unlock()
 
-	return fmt.Sprint(s.data)
+	return fmt.Sprint(s.sortNoLock())
 }

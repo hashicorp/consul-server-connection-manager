@@ -49,7 +49,7 @@ func TestBalancerOneAddress(t *testing.T) {
 	// Initially there are no sub-connections.
 	err = blr.hasTransitioned(addr)
 	require.Error(t, err)
-	require.Equal(t, "no sub-connections", err.Error())
+	require.Equal(t, "no known sub-connections", err.Error())
 
 	// Update the connection with an address.
 	// This simulates the resolver updating the ClientConn.

@@ -61,7 +61,7 @@ type clientConnWrapper struct {
 
 // NewSubConn is called by the base Balancer when it creates a new sub connection.
 func (c *clientConnWrapper) NewSubConn(addrs []resolver.Address, opts balancer.NewSubConnOptions) (balancer.SubConn, error) {
-	c.log.Debug("clientConnWrapper.NewSubConn", "addrs", addrs)
+	c.log.Trace("clientConnWrapper.NewSubConn", "addrs", addrs)
 
 	if len(addrs) > 1 {
 		// We expect only one address per subconnection, which should always be
@@ -83,7 +83,7 @@ func (c *clientConnWrapper) NewSubConn(addrs []resolver.Address, opts balancer.N
 
 // UpdateAddresses is called by the base Balancer when the sub connection address changes.
 func (c *clientConnWrapper) UpdateAddresses(sc balancer.SubConn, addrs []resolver.Address) {
-	c.log.Debug("clientConnWrapper.UpdateAddresses", "sub-conn", sc, "addrs", addrs)
+	c.log.Trace("clientConnWrapper.UpdateAddresses", "sub-conn", sc, "addrs", addrs)
 
 	if len(addrs) > 1 {
 		// We expect only one address per subconnection, which should always be
@@ -130,7 +130,7 @@ func (b *watcherBalancer) hasTransitioned(to Addr) error {
 	defer b.lock.Unlock()
 
 	if len(b.scs) == 0 {
-		return fmt.Errorf("no sub-connections")
+		return fmt.Errorf("no known sub-connections")
 	}
 
 	// note: using two for loops to make the error messages deterministic for tests.
@@ -160,7 +160,7 @@ func (b *watcherBalancer) hasTransitioned(to Addr) error {
 //
 // Once a sub-conn is shutdown, we stop tracking it.
 func (b *watcherBalancer) UpdateSubConnState(sc balancer.SubConn, state balancer.SubConnState) {
-	b.log.Debug("balancer.UpdateSubConnState", "sc", sc, "state", state)
+	b.log.Trace("balancer.UpdateSubConnState", "sc", sc, "state", state)
 	b.Balancer.UpdateSubConnState(sc, state)
 
 	b.lock.Lock()
@@ -186,7 +186,7 @@ func (b *watcherBalancer) UpdateSubConnState(sc balancer.SubConn, state balancer
 // This is called by the base Balancer when the set of ready sub-connections
 // has changed.
 func (b *watcherBalancer) Build(info base.PickerBuildInfo) balancer.Picker {
-	b.log.Debug("pickerBuilder.Build", "sub-conns ready", len(info.ReadySCs))
+	b.log.Trace("pickerBuilder.Build", "sub-conns ready", len(info.ReadySCs))
 
 	b.lock.Lock()
 	defer b.lock.Unlock()

@@ -31,7 +31,6 @@ func (n *NetaddrsDiscoverer) Discover(ctx context.Context) ([]Addr, error) {
 	start := n.clock.Now()
 	addrs, err := netaddrs.IPAddrs(ctx, n.config.Addresses, n.log)
 	if err != nil {
-		n.log.Error("discovering server addresses", "err", err)
 		return nil, err
 	}
 

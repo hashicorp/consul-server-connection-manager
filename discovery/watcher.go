@@ -14,9 +14,11 @@ import (
 	"github.com/hashicorp/consul/proto-public/pbserverdiscovery"
 	"github.com/hashicorp/go-hclog"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/status"
 )
 
 // State is the info a caller wants to know after initialization.
@@ -215,10 +217,13 @@ func (w *Watcher) currentState() State {
 	}
 }
 
-// Stop stops the Watcher after Run is called.
-// This cancels the Watcher's internal context.
+// Stop stops the Watcher after Run is called. This logs out of the auth method,
+// if applicable, waits for the Watcher's Run method to return, and closes the
+// gRPC connection. After calling Stop, the Watcher and the gRPC connection are
+// no longer valid to use.
 func (w *Watcher) Stop() {
-	w.log.Debug("Watcher.Stop")
+	w.log.Info("stopping")
+
 	// If applicable, attempt to log out. This must be done prior to the
 	// connection being closed. We ignore errors since we must continue to shut
 	// down.
@@ -230,7 +235,11 @@ func (w *Watcher) Stop() {
 
 		err := w.acls.Logout(ctx)
 		if err != nil {
-			w.log.Error("acl logout failed", "error", err)
+			if err != ErrAlreadyLoggedOut {
+				w.log.Error("ACL auth method logout failed", "error", err)
+			}
+		} else {
+			w.log.Info("ACL auth method logout succeeded")
 		}
 	}
 
@@ -255,9 +264,10 @@ func (w *Watcher) run(bo backoff.BackOff, nextServer func(*addrSet) error) {
 		// while connected to the server. It always returns an error on failure
 		// or when disconnected.
 		metrics.SetGauge([]string{"consul_connected"}, 0)
+		w.log.Info("trying to connect to a Consul server")
 		err := nextServer(addrs)
 		if err != nil {
-			w.log.Error("run", "err", err.Error())
+			logNonContextError(w.log, "connection error", err)
 		}
 		metrics.SetGauge([]string{"consul_connected"}, 0)
 
@@ -273,9 +283,11 @@ func (w *Watcher) run(bo backoff.BackOff, nextServer func(*addrSet) error) {
 			w.log.Warn("backoff stopped; aborting")
 			return
 		}
+
+		w.log.Debug("backoff", "retry after", duration)
 		select {
 		case <-w.ctx.Done():
-			w.log.Warn("aborting", "err", w.ctx.Err())
+			w.log.Debug("aborting", "error", w.ctx.Err())
 			return
 		case <-w.clock.After(duration):
 		}
@@ -289,7 +301,7 @@ func (w *Watcher) run(bo backoff.BackOff, nextServer func(*addrSet) error) {
 // nextServer returns on any error, such as failure to connect or upon being
 // disconnected for any reason. It should always return with a non-nil erorr.
 func (w *Watcher) nextServer(addrs *addrSet) error {
-	w.log.Debug("Watcher.nextServer", "addrs", addrs.String())
+	w.log.Trace("Watcher.nextServer", "addrs", addrs.String())
 
 	w.switchLock.Lock()
 	w.ctxForSwitch, w.cancelForSwitch = context.WithCancel(w.ctx)
@@ -324,8 +336,9 @@ func (w *Watcher) nextServer(addrs *addrSet) error {
 		//   then we will rarely ever re-run discovery.
 		found, err := w.discoverer.Discover(w.ctx)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to discover Consul server addresses: %w", err)
 		}
+		w.log.Info("discovered Consul servers", "addresses", found)
 
 		// This preserves lastAttempt timestamps for addresses currently in
 		// addrs, so that we try the least-recently attempted server. This
@@ -333,14 +346,14 @@ func (w *Watcher) nextServer(addrs *addrSet) error {
 		addrs.SetAddrs(found...)
 	}
 
-	if !addrs.AllAttempted() {
-		// Choose a server as "current" and connect to it.
-		//
-		// Addresses are sorted first by unattempted, and then by lastAttempt timestamp
-		// so that we always try the least-recently attempted address.
-		sortedAddrs := addrs.Sorted()
-		w.log.Debug("current known Consul servers", "addresses", sortedAddrs)
+	// Choose a server as "current" and connect to it.
+	//
+	// Addresses are sorted first by unattempted, and then by lastAttempt timestamp
+	// so that we always try the least-recently attempted address.
+	sortedAddrs := addrs.Sorted()
+	w.log.Info("current prioritized list of known Consul servers", "addresses", sortedAddrs)
 
+	if !addrs.AllAttempted() {
 		addr := sortedAddrs[0]
 		addrs.SetAttemptTime(addr)
 
@@ -354,19 +367,20 @@ func (w *Watcher) nextServer(addrs *addrSet) error {
 
 	current := w.currentServer.Load().(serverState)
 	if current.addr.Empty() {
-		return fmt.Errorf("unable to connect to a server")
+		return fmt.Errorf("unable to connect to a Consul server")
 	}
 
 	if eval := w.config.ServerEvalFn; eval != nil {
 		state := w.currentState()
 		if !eval(state) {
 			w.currentServer.Store(serverState{})
-			return fmt.Errorf("ServerEvalFn returned false for server: %q", state.Address.String())
+			return fmt.Errorf("skipping Consul server %q because ServerEvalFn returned false", state.Address.String())
 		}
 	}
 	metrics.MeasureSince([]string{"connect_duration"}, start)
 	metrics.SetGauge([]string{"consul_connected"}, 1)
-	w.log.Debug("connected to Consul server", "address", current.addr)
+
+	w.log.Info("connected to Consul server", "address", current.addr)
 
 	// Set init complete here. This indicates to Run() that initialization
 	// completed: we found a server, have a token (if any), fetched dataplane
@@ -384,13 +398,15 @@ func (w *Watcher) nextServer(addrs *addrSet) error {
 // gRPC connection to use that address, doing the ACL token login (one time
 // only) and grabbing dataplane features for this server.
 func (w *Watcher) connect(addr Addr) (serverState, error) {
-	w.log.Debug("Watcher.connect", "addr", addr)
+	w.log.Trace("Watcher.connect", "addr", addr)
 
 	// Tell the gRPC connection to switch to the selected server.
+	w.log.Debug("switching to Consul server", "address", addr)
 	err := w.switchServer(addr)
 	if err != nil {
-		return serverState{}, err
+		return serverState{}, fmt.Errorf("failed to switch to Consul server %q: %w", addr, err)
 	}
+	w.log.Debug("switched to Consul server successfully", "address", addr)
 
 	// One time, do the ACL token login.
 	select {
@@ -405,13 +421,16 @@ func (w *Watcher) connect(addr Addr) (serverState, error) {
 				if w.acls == nil {
 					w.acls = newACLs(w.conn, w.config)
 				}
-				token, err := w.acls.Login(w.ctx)
+				accessorId, secretId, err := w.acls.Login(w.ctx)
 				if err != nil {
-					w.log.Error("auth method login failed", "error", err)
-					return serverState{}, err
+					if err != ErrAlreadyLoggedIn {
+						w.log.Error("ACL auth method login failed", "error", err)
+						return serverState{}, err
+					}
+				} else {
+					w.log.Info("ACL auth method login succeeded", "accessorID", accessorId)
 				}
-				w.log.Info("auth method login succeeded")
-				w.token.Store(token)
+				w.token.Store(secretId)
 			}
 		}
 	}
@@ -420,6 +439,10 @@ func (w *Watcher) connect(addr Addr) (serverState, error) {
 	features, err := w.getDataplaneFeatures()
 	if err != nil {
 		return serverState{}, err
+	}
+
+	for name, supported := range features {
+		w.log.Debug("feature", "supported", supported, "name", name)
 	}
 
 	return serverState{addr: addr, dataplaneFeatures: features}, nil
@@ -431,7 +454,7 @@ func (w *Watcher) connect(addr Addr) (serverState, error) {
 // this returns, the gRPC connection will send requests to the given server,
 // since the actual address the conection is using is abstracted away.
 func (w *Watcher) switchServer(to Addr) error {
-	w.log.Debug("Watcher.switchServer", "to", to)
+	w.log.Trace("Watcher.switchServer", "to", to)
 	w.switchLock.Lock()
 	defer w.switchLock.Unlock()
 
@@ -451,7 +474,7 @@ func (w *Watcher) switchServer(to Addr) error {
 // logic as for any other type of error. This is kind of indirect, but also
 // nice in that we don't have to special case much here.
 func (w *Watcher) requestServerSwitch() {
-	w.log.Debug("Watcher.requestServerSwitch")
+	w.log.Trace("Watcher.requestServerSwitch")
 	if !w.switchLock.TryLock() {
 		// switch currently in progress.
 		return
@@ -468,7 +491,7 @@ func (w *Watcher) getDataplaneFeatures() (map[string]bool, error) {
 	client := pbdataplane.NewDataplaneServiceClient(w.conn)
 	resp, err := client.GetSupportedDataplaneFeatures(w.ctxForSwitch, &pbdataplane.GetSupportedDataplaneFeaturesRequest{})
 	if err != nil {
-		return nil, fmt.Errorf("checking supported features: %w", err)
+		return nil, fmt.Errorf("fetching supported dataplane features: %w", err)
 	}
 
 	// Translate features to a map, so that we don't have to pass gRPC
@@ -476,9 +499,7 @@ func (w *Watcher) getDataplaneFeatures() (map[string]bool, error) {
 	features := map[string]bool{}
 	for _, feat := range resp.SupportedDataplaneFeatures {
 		nameStr := pbdataplane.DataplaneFeatures_name[int32(feat.FeatureName)]
-		supported := feat.GetSupported()
-		w.log.Debug("feature", "supported", supported, "name", nameStr)
-		features[nameStr] = supported
+		features[nameStr] = feat.GetSupported()
 	}
 
 	return features, nil
@@ -507,11 +528,11 @@ func (w *Watcher) watch(addrs *addrSet) error {
 // Watcher's context is cancelled, or when the Watcher is told to switch
 // servers.
 func (w *Watcher) watchStream(addrs *addrSet) error {
-	w.log.Debug("Watcher.watchStream")
+	w.log.Trace("Watcher.watchStream")
 	client := pbserverdiscovery.NewServerDiscoveryServiceClient(w.conn)
 	serverStream, err := client.WatchServers(w.ctxForSwitch, &pbserverdiscovery.WatchServersRequest{})
 	if err != nil {
-		w.log.Error("unable to open server watch stream", "error", err)
+		logNonContextError(w.log, "failed to open server watch stream", err)
 		return err
 	}
 
@@ -519,9 +540,6 @@ func (w *Watcher) watchStream(addrs *addrSet) error {
 		// This blocks until there is a change from the server.
 		resp, err := serverStream.Recv()
 		if err != nil {
-			if !errors.Is(err, context.Canceled) {
-				w.log.Error("unable to receive from server watch stream", "error", err)
-			}
 			return err
 		}
 
@@ -531,7 +549,7 @@ func (w *Watcher) watchStream(addrs *addrSet) error {
 			addr, err := w.nodeToAddrFn(srv.Id, srv.Address)
 			if err != nil {
 				// ignore the server on failure.
-				w.log.Warn("failed to parse server address from watch stream", "error", err)
+				w.log.Warn("failed to parse server address from server watch stream; ignoring address", "error", err)
 				continue
 			}
 			streamAddrs = append(streamAddrs, addr)
@@ -540,14 +558,14 @@ func (w *Watcher) watchStream(addrs *addrSet) error {
 		// Update the addrSet. This sets the lastUpdated timestamp for each address,
 		// and removes servers not present in the server watch stream.
 		addrs.SetAddrs(streamAddrs...)
-		w.log.Debug("updated known Consul servers from watch stream", "addresses", addrs.Sorted())
+		w.log.Info("updated known Consul servers from watch stream", "addresses", addrs.Sorted())
 	}
 }
 
 // watchSleep is used when the server watch stream is not supported.
 // It may be interrupted if we are told to switch servers.
 func (w *Watcher) watchSleep() error {
-	w.log.Debug("Watcher.watchSleep", "interval", w.config.ServerWatchDisabledInterval)
+	w.log.Trace("Watcher.watchSleep", "interval", w.config.ServerWatchDisabledInterval)
 
 	for {
 		select {
@@ -559,7 +577,18 @@ func (w *Watcher) watchSleep() error {
 		// is the server still OK?
 		_, err := w.getDataplaneFeatures()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to reach Consul server with server watch stream disabled: %w", err)
 		}
+	}
+}
+
+func logNonContextError(log hclog.Logger, msg string, err error, args ...interface{}) {
+	args = append(args, "error", err)
+
+	s, ok := status.FromError(err)
+	if errors.Is(err, context.Canceled) || (ok && s.Code() == codes.Canceled) {
+		log.Trace("context error: "+msg, args...)
+	} else {
+		log.Error(msg, args...)
 	}
 }
