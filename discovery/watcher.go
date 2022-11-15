@@ -72,7 +72,8 @@ type Watcher struct {
 
 	acls *ACLs
 
-	subcribers []chan State
+	subscribers       []chan State
+	subscriptionMutex sync.RWMutex
 
 	// discoverer discovers IP addresses. In tests, we use mock this interface
 	// to inject custom server ports.
@@ -161,14 +162,20 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 }
 
 func (w *Watcher) Subscribe() <-chan State {
+	w.subscriptionMutex.Lock()
+	defer w.subscriptionMutex.Unlock()
+
 	ch := make(chan State, 1)
-	w.subcribers = append(w.subcribers, ch)
+	w.subscribers = append(w.subscribers, ch)
 	return ch
 }
 
 func (w *Watcher) notifySubscribers() {
+	w.subscriptionMutex.RLock()
+	defer w.subscriptionMutex.RUnlock()
+
 	state := w.currentState()
-	for _, ch := range w.subcribers {
+	for _, ch := range w.subscribers {
 		select {
 		case ch <- state:
 			// success

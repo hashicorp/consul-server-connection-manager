@@ -114,6 +114,10 @@ func TestRun(t *testing.T) {
 			// Get initial state. This blocks until initialization is complete.
 			initialState, err := w.State()
 			require.NoError(t, err)
+
+			// subscribe again for race detection
+			_ = w.Subscribe()
+
 			require.NotNil(t, initialState, initialState.GRPCConn)
 			require.Contains(t, servers.servers, initialState.Address.String())
 
