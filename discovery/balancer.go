@@ -36,7 +36,8 @@ import (
 //     SHUTDOWN status.
 type watcherBalancer struct {
 	balancer.Balancer
-	log hclog.Logger
+	// log hclog.Logger
+	log func() hclog.Logger
 
 	// State to track sub-connections
 	lock sync.Mutex
@@ -56,17 +57,18 @@ var _ balancer.Picker = (*watcherBalancer)(nil)
 type clientConnWrapper struct {
 	balancer.ClientConn
 	balancer *watcherBalancer
-	log      hclog.Logger
+	// log      hclog.Logger
+	log func() hclog.Logger
 }
 
 // NewSubConn is called by the base Balancer when it creates a new sub connection.
 func (c *clientConnWrapper) NewSubConn(addrs []resolver.Address, opts balancer.NewSubConnOptions) (balancer.SubConn, error) {
-	c.log.Trace("clientConnWrapper.NewSubConn", "addrs", addrs)
+	c.log().Trace("clientConnWrapper.NewSubConn", "addrs", addrs)
 
 	if len(addrs) > 1 {
 		// We expect only one address per subconnection, which should always be
 		// the case for us (no nested resolver / balancer setup).
-		c.log.Error("received multiple addresses for gRPC sub-connection")
+		c.log().Error("received multiple addresses for gRPC sub-connection")
 		return nil, fmt.Errorf("invalid use of gRPC balancer; expected only one address for gRPC sub-connection")
 	}
 
@@ -83,12 +85,12 @@ func (c *clientConnWrapper) NewSubConn(addrs []resolver.Address, opts balancer.N
 
 // UpdateAddresses is called by the base Balancer when the sub connection address changes.
 func (c *clientConnWrapper) UpdateAddresses(sc balancer.SubConn, addrs []resolver.Address) {
-	c.log.Trace("clientConnWrapper.UpdateAddresses", "sub-conn", sc, "addrs", addrs)
+	c.log().Trace("clientConnWrapper.UpdateAddresses", "sub-conn", sc, "addrs", addrs)
 
 	if len(addrs) > 1 {
 		// We expect only one address per subconnection, which should always be
 		// the case for us (no nested resolver / balancer setup).
-		c.log.Error("received multiple addresses for gRPC sub-connection")
+		c.log().Error("received multiple addresses for gRPC sub-connection")
 		return
 	}
 
@@ -126,6 +128,7 @@ func (b *watcherBalancer) WaitForTransition(ctx context.Context, to Addr) error 
 
 // hasTransitioned checks if we've finished transitioning to the given address.
 func (b *watcherBalancer) hasTransitioned(to Addr) error {
+	// FIXME: why does this panic?
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
@@ -160,7 +163,7 @@ func (b *watcherBalancer) hasTransitioned(to Addr) error {
 //
 // Once a sub-conn is shutdown, we stop tracking it.
 func (b *watcherBalancer) UpdateSubConnState(sc balancer.SubConn, state balancer.SubConnState) {
-	b.log.Trace("balancer.UpdateSubConnState", "sc", sc, "state", state)
+	b.log().Trace("balancer.UpdateSubConnState", "sc", sc, "state", state)
 	b.Balancer.UpdateSubConnState(sc, state)
 
 	b.lock.Lock()
@@ -186,7 +189,7 @@ func (b *watcherBalancer) UpdateSubConnState(sc balancer.SubConn, state balancer
 // This is called by the base Balancer when the set of ready sub-connections
 // has changed.
 func (b *watcherBalancer) Build(info base.PickerBuildInfo) balancer.Picker {
-	b.log.Trace("pickerBuilder.Build", "sub-conns ready", len(info.ReadySCs))
+	b.log().Trace("pickerBuilder.Build", "sub-conns ready", len(info.ReadySCs))
 
 	b.lock.Lock()
 	defer b.lock.Unlock()

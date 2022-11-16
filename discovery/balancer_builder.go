@@ -12,8 +12,9 @@ import (
 // balancerBuilder is invoked by gRPC to construct our custom balancer. This
 // handles the hook up of the balancer to a Watcher.
 type balancerBuilder struct {
-	watcher *Watcher
-	log     hclog.Logger
+	// watcher *Watcher
+	// log hclog.Logger
+	log func() hclog.Logger
 
 	// This is the unique id for this builder in gRPC global balancer registry,
 	// used as the loadBalancingPolicy name when configuring a gRPC connection.
@@ -26,11 +27,12 @@ var _ balancer.Builder = (*balancerBuilder)(nil)
 // Balancers must be globally registered and cannot be unregistered, so we register each builder
 // with a unique id to facilitate testing. This returns the loadBalancingPolicy name used to enable
 // this balancer on a gRPC connection.
-func registerBalancer(w *Watcher, log hclog.Logger) string {
+func registerBalancer(log func() hclog.Logger) string {
 	b := &balancerBuilder{
-		watcher:        w,
-		log:            log,
-		hackPolicyName: randomString(),
+		// watcher: w,
+		log: log,
+		// hackPolicyName: randomString(),
+		hackPolicyName: "consul-server-connection-manager",
 	}
 	balancer.Register(b)
 	return b.hackPolicyName
@@ -45,7 +47,7 @@ func (b *balancerBuilder) Name() string {
 // Since we grpc.Dial one time in the Watcher, this is called only the first time a sub-connection
 // needs to be created (so after the resolver first sets an address on the connection).
 func (b *balancerBuilder) Build(cc balancer.ClientConn, opt balancer.BuildOptions) balancer.Balancer {
-	b.log.Trace("balancerBuilder.Build")
+	b.log().Trace("balancerBuilder.Build")
 
 	blr := &watcherBalancer{
 		log: b.log,
@@ -56,9 +58,8 @@ func (b *balancerBuilder) Build(cc balancer.ClientConn, opt balancer.BuildOption
 	baseBuilder := base.NewBalancerBuilder(b.hackPolicyName, blr, base.Config{})
 	blr.Balancer = baseBuilder.Build(ccWrapper, opt)
 
-	b.watcher.balancer = blr
-	return b.watcher.balancer
-
+	// b.watcher.balancer = blr
+	return blr
 }
 
 // randomString returns a 32-byte hex-encoded string.
