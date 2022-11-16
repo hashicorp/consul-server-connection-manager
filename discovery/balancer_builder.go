@@ -63,10 +63,10 @@ func (b *balancerBuilder) Build(cc balancer.ClientConn, opt balancer.BuildOption
 }
 
 // randomString returns a 32-byte hex-encoded string.
-func randomString() string {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		panic("failed to generate random bytes")
-	}
-	return hex.EncodeToString(b)
-}
+// func randomString() string {
+// 	b := make([]byte, 32)
+// 	if _, err := rand.Read(b); err != nil {
+// 		panic("failed to generate random bytes")
+// 	}
+// 	return hex.EncodeToString(b)
+// }
