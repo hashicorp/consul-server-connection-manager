@@ -1,8 +1,8 @@
 package discovery
 
 import (
-	"crypto/rand"
-	"encoding/hex"
+	// "crypto/rand"
+	// "encoding/hex"
 
 	"github.com/hashicorp/go-hclog"
 	"google.golang.org/grpc/balancer"
