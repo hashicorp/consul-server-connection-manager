@@ -175,16 +175,17 @@ func mustMakeAddr(t *testing.T, addr string, port int) Addr {
 func makeBalancerBuilder(t *testing.T, watcher *Watcher) *watcherBalancer {
 	t.Helper()
 
-	hackPolicyId := registerBalancer(watcher, watcher.log)
+	hackPolicyId := registerBalancer(func() hclog.Logger { return watcher.log })
 
 	builder := balancer.Get(hackPolicyId)
 	require.IsType(t, &balancerBuilder{}, builder)
-	bb := builder.(*balancerBuilder)
-	require.Equal(t, watcher, bb.watcher)
+	// bb := builder.(*balancerBuilder)
+	// require.Equal(t, watcher, bb.watcher)
 
 	// Build is called by gRPC normally.
 	wb := builder.Build(&fakeBalancerClientConn{}, balancer.BuildOptions{})
-	require.Equal(t, wb, watcher.balancer)
+	watcher.balancer = wb.(*watcherBalancer)
+	// require.Equal(t, wb, watcher.balancer)
 	require.IsType(t, &watcherBalancer{}, wb)
 
 	return wb.(*watcherBalancer)
