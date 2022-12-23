@@ -136,24 +136,27 @@ func (b *watcherBalancer) hasTransitioned(to Addr) error {
 		return fmt.Errorf("no known sub-connections")
 	}
 
-	// note: using two for loops to make the error messages deterministic for tests.
-	for _, state := range b.scs {
-		if state.addr.Addr != to.String() && state.state.ConnectivityState != connectivity.Shutdown {
-			return fmt.Errorf("old sub-connection is not shutdown (state=%s)", state.state.ConnectivityState)
-		}
-	}
-
 	foundTarget := false
+	var targetState connectivity.State
 	for _, state := range b.scs {
 		if state.addr.Addr == to.String() {
 			foundTarget = true
-			if state.state.ConnectivityState != connectivity.Ready {
-				return fmt.Errorf("target sub-connection is not ready (state=%s)", state.state.ConnectivityState)
+
+			// Return after checking old sub-connections to make the error messages
+			// deterministic for tests.
+			targetState = state.state.ConnectivityState
+		} else {
+			if state.state.ConnectivityState != connectivity.Shutdown {
+				return fmt.Errorf("old sub-connection is not shutdown (state=%s)", state.state.ConnectivityState)
 			}
 		}
 	}
 
-	if !foundTarget {
+	if foundTarget {
+		if targetState != connectivity.Ready {
+			return fmt.Errorf("target sub-connection is not ready (state=%s)", targetState)
+		}
+	} else {
 		return fmt.Errorf("no sub-connection found for target address %q", to.String())
 	}
 	return nil
