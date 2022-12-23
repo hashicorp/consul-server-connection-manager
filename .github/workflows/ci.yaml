@@ -11,7 +11,7 @@ jobs:
     strategy:
       matrix:
         consul-version:
-        - 1.14.0-beta1
+        - 1.14.3
     steps:
     - uses: actions/checkout@v3
     - uses: actions/setup-go@v3
