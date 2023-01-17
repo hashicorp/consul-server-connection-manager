@@ -79,5 +79,5 @@ func (r *watcherResolver) Close() {}
 // again. It's just a hint, resolver can ignore this if it's not necessary.
 // It could be called multiple times concurrently."
 func (r *watcherResolver) ResolveNow(_ resolver.ResolveNowOptions) {
-	r.cc.WaitForTransition(context.Background(), r.addr)
+	_ = r.cc.WaitForTransition(context.Background(), r.addr)
 }
