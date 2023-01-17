@@ -41,7 +41,7 @@ func (*fakeSubConn) UpdateAddresses([]resolver.Address) {}
 
 func TestBalancerOneAddress(t *testing.T) {
 	watcher := &Watcher{log: hclog.NewNullLogger()}
-	blr := makeBalancerBuilder(t, watcher)
+	blr := makeBalancer(t, watcher)
 
 	addr, err := MakeAddr("127.0.0.1", 1234)
 	require.NoError(t, err)
@@ -70,13 +70,13 @@ func TestBalancerOneAddress(t *testing.T) {
 		connectivity.TransientFailure,
 	} {
 		blr.UpdateSubConnState(sc, balancer.SubConnState{ConnectivityState: state})
-		require.Len(t, blr.scs, 1)
+		require.Len(t, blr.cc.scs, 1)
 		requireSubConnState(t, blr, sc, state, addr, "target sub-connection is not ready")
 	}
 
 	// When the sub-conn is ready and there are no other sub-conns.
 	blr.UpdateSubConnState(sc, balancer.SubConnState{ConnectivityState: connectivity.Ready})
-	require.Len(t, blr.scs, 1)
+	require.Len(t, blr.cc.scs, 1)
 	requireSubConnState(t, blr, sc, connectivity.Ready, addr, "")
 
 	// Update the connection with no addresses.
@@ -86,17 +86,17 @@ func TestBalancerOneAddress(t *testing.T) {
 	require.Equal(t, balancer.ErrBadResolverState, err)
 
 	// Still ready. The balancer keeps tracking the address until it is shutdown.
-	require.Len(t, blr.scs, 1)
+	require.Len(t, blr.cc.scs, 1)
 	requireSubConnState(t, blr, sc, connectivity.Ready, addr, "")
 
 	// Mark the connection shutdown. The balancer stops tracking it.
 	blr.UpdateSubConnState(sc, balancer.SubConnState{ConnectivityState: connectivity.Shutdown})
-	require.Len(t, blr.scs, 0)
+	require.Len(t, blr.cc.scs, 0)
 }
 
 func TestBalancerTwoAddressses(t *testing.T) {
 	watcher := &Watcher{log: hclog.NewNullLogger()}
-	blr := makeBalancerBuilder(t, watcher)
+	blr := makeBalancer(t, watcher)
 
 	fromAddr := mustMakeAddr(t, "127.0.0.1", 1234)
 	toAddr := mustMakeAddr(t, "127.0.0.2", 2345)
@@ -107,7 +107,7 @@ func TestBalancerTwoAddressses(t *testing.T) {
 			Addresses: []resolver.Address{{Addr: fromAddr.String()}},
 		},
 	}))
-	require.Len(t, blr.scs, 1)
+	require.Len(t, blr.cc.scs, 1)
 	fromSC := findSubConn(t, blr, fromAddr)
 	requireSubConnState(t, blr, fromSC, connectivity.Idle, fromAddr, "target sub-connection is not ready")
 
@@ -120,7 +120,7 @@ func TestBalancerTwoAddressses(t *testing.T) {
 			Addresses: []resolver.Address{{Addr: toAddr.String()}},
 		},
 	}))
-	require.Len(t, blr.scs, 2)
+	require.Len(t, blr.cc.scs, 2)
 	toSC := findSubConn(t, blr, toAddr)
 	require.NotEqual(t, fromSC, toSC)
 	requireSubConnState(t, blr, toSC, connectivity.Idle, toAddr, "old sub-connection is not shutdown")
@@ -134,11 +134,11 @@ func TestBalancerTwoAddressses(t *testing.T) {
 	}
 	for _, state := range nonShutdownStates {
 		blr.UpdateSubConnState(fromSC, balancer.SubConnState{ConnectivityState: state})
-		require.Len(t, blr.scs, 2)
+		require.Len(t, blr.cc.scs, 2)
 
 		for _, state := range nonShutdownStates {
 			blr.UpdateSubConnState(toSC, balancer.SubConnState{ConnectivityState: state})
-			require.Len(t, blr.scs, 2)
+			require.Len(t, blr.cc.scs, 2)
 			// The transition to second conn is not complete until the the first conn is shutdown.
 			requireSubConnState(t, blr, toSC, state, toAddr, "old sub-connection is not shutdown")
 		}
@@ -146,7 +146,7 @@ func TestBalancerTwoAddressses(t *testing.T) {
 
 	// Shutdown the first connection.
 	blr.UpdateSubConnState(fromSC, balancer.SubConnState{ConnectivityState: connectivity.Shutdown})
-	require.Len(t, blr.scs, 1)
+	require.Len(t, blr.cc.scs, 1)
 
 	// Simulate non-Ready state changes on the second connection.
 	for _, state := range []connectivity.State{
@@ -155,14 +155,14 @@ func TestBalancerTwoAddressses(t *testing.T) {
 		connectivity.TransientFailure,
 	} {
 		blr.UpdateSubConnState(toSC, balancer.SubConnState{ConnectivityState: state})
-		require.Len(t, blr.scs, 1)
+		require.Len(t, blr.cc.scs, 1)
 		// The transition to second conn is not complete until the second conn is ready.
 		requireSubConnState(t, blr, toSC, state, toAddr, "target sub-connection is not ready")
 	}
 
 	// Put the second connection in ready state.
 	blr.UpdateSubConnState(toSC, balancer.SubConnState{ConnectivityState: connectivity.Ready})
-	require.Len(t, blr.scs, 1)
+	require.Len(t, blr.cc.scs, 1)
 	// Transition complete!
 	requireSubConnState(t, blr, toSC, connectivity.Ready, toAddr, "")
 }
@@ -172,21 +172,20 @@ func mustMakeAddr(t *testing.T, addr string, port int) Addr {
 	return a
 }
 
-func makeBalancerBuilder(t *testing.T, watcher *Watcher) *watcherBalancer {
+func makeBalancer(t *testing.T, watcher *Watcher) *watcherBalancer {
 	t.Helper()
 
-	// hackPolicyId := registerBalancer(func() hclog.Logger { return watcher.log })
+	// hackPolicyId := registerBalancer(watcher, watcher.log)
 
 	// TODO: some way to not hardcode this?
 	builder := balancer.Get("consul-server-connection-manager")
 	require.IsType(t, &watcherBalancerBuilder{}, builder)
-	// bb := builder.(*balancerBuilder)
-	// require.Equal(t, watcher, bb.watcher)
+	bb := builder.(*watcherBalancerBuilder)
 
 	// Build is called by gRPC normally.
-	wb := builder.Build(&fakeBalancerClientConn{}, balancer.BuildOptions{})
+	wb := bb.Build(&fakeBalancerClientConn{}, balancer.BuildOptions{})
 	watcher.balancer = wb.(*watcherBalancer)
-	// require.Equal(t, wb, watcher.balancer)
+	require.Equal(t, wb, watcher.balancer)
 	require.IsType(t, &watcherBalancer{}, wb)
 
 	return wb.(*watcherBalancer)
@@ -194,7 +193,7 @@ func makeBalancerBuilder(t *testing.T, watcher *Watcher) *watcherBalancer {
 
 func findSubConn(t *testing.T, wb *watcherBalancer, addr Addr) *fakeSubConn {
 	var found balancer.SubConn
-	for sc, state := range wb.scs {
+	for sc, state := range wb.cc.scs {
 		if state.addr.Addr == addr.String() {
 			found = sc
 			break
@@ -206,8 +205,8 @@ func findSubConn(t *testing.T, wb *watcherBalancer, addr Addr) *fakeSubConn {
 }
 
 func requireSubConnState(t *testing.T, wb *watcherBalancer, sc balancer.SubConn, state connectivity.State, addr Addr, transitionErr string) {
-	require.Equal(t, wb.scs[sc].state.ConnectivityState, state)
-	require.Equal(t, wb.scs[sc].addr.Addr, addr.String())
+	require.Equal(t, wb.cc.scs[sc].state.ConnectivityState, state)
+	require.Equal(t, wb.cc.scs[sc].addr.Addr, addr.String())
 
 	err := wb.hasTransitioned(addr)
 	if transitionErr != "" {

@@ -60,16 +60,12 @@ func (b *watcherBalancerBuilder) Build(cc balancer.ClientConn, opt balancer.Buil
 
 	ccWrapper := clientConnWrapper{
 		ClientConn: cc,
+		scs:        map[balancer.SubConn]*subConnState{},
 		log:        b.log,
 	}
 
-	blr := &watcherBalancer{
+	return &watcherBalancer{
 		cc:       ccWrapper,
-		scs:      map[balancer.SubConn]*subConnState{},
 		Balancer: b.baseBuilder.Build(&ccWrapper, opt),
 	}
-
-	blr.cc.balancer = blr
-
-	return blr
 }

@@ -43,15 +43,6 @@ type watcherBalancer struct {
 	subConn    balancer.SubConn
 	state      connectivity.State
 	activeAddr resolver.Address
-
-	// State to track sub-connections
-	lock sync.Mutex
-	scs  map[balancer.SubConn]*subConnState
-}
-
-type subConnState struct {
-	state balancer.SubConnState
-	addr  resolver.Address
 }
 
 // Ensure our watcherBalancer implements the gRPC Balancer interface
@@ -63,7 +54,14 @@ type clientConnWrapper struct {
 
 	log hclog.Logger
 
-	balancer *watcherBalancer
+	// State to track sub-connections
+	lock sync.Mutex
+	scs  map[balancer.SubConn]*subConnState
+}
+
+type subConnState struct {
+	state balancer.SubConnState
+	addr  resolver.Address
 }
 
 // Ensure our clientConnWrapper implements the gRPC ClientConn interface
@@ -84,9 +82,9 @@ func (c *clientConnWrapper) NewSubConn(addrs []resolver.Address, opts balancer.N
 
 	if err == nil && len(addrs) == 1 {
 		// Store the address for this sub-connection.
-		c.balancer.lock.Lock()
-		defer c.balancer.lock.Unlock()
-		c.balancer.scs[sc] = &subConnState{addr: addrs[0]}
+		c.lock.Lock()
+		defer c.lock.Unlock()
+		c.scs[sc] = &subConnState{addr: addrs[0]}
 	}
 	return sc, err
 }
@@ -106,13 +104,13 @@ func (c *clientConnWrapper) UpdateAddresses(sc balancer.SubConn, addrs []resolve
 
 	// Update the address for this sub-connection.
 	if len(addrs) == 1 {
-		c.balancer.lock.Lock()
-		defer c.balancer.lock.Unlock()
-		_, ok := c.balancer.scs[sc]
+		c.lock.Lock()
+		defer c.lock.Unlock()
+		_, ok := c.scs[sc]
 		if !ok {
-			c.balancer.scs[sc] = &subConnState{}
+			c.scs[sc] = &subConnState{}
 		}
-		c.balancer.scs[sc].addr = addrs[0]
+		c.scs[sc].addr = addrs[0]
 	}
 }
 
@@ -136,16 +134,16 @@ func (b *watcherBalancer) WaitForTransition(ctx context.Context, to Addr) error 
 
 // hasTransitioned checks if we've finished transitioning to the given address.
 func (b *watcherBalancer) hasTransitioned(to Addr) error {
-	b.lock.Lock()
-	defer b.lock.Unlock()
+	b.cc.lock.Lock()
+	defer b.cc.lock.Unlock()
 
-	if len(b.scs) == 0 {
+	if len(b.cc.scs) == 0 {
 		return fmt.Errorf("no known sub-connections")
 	}
 
 	foundTarget := false
 	var targetState connectivity.State
-	for _, state := range b.scs {
+	for _, state := range b.cc.scs {
 		if state.addr.Addr == to.String() {
 			foundTarget = true
 
@@ -174,7 +172,7 @@ func (b *watcherBalancer) hasTransitioned(to Addr) error {
 // will begin calling ResolveNow on the active name resolver with
 // exponential backoff until a subsequent call to UpdateClientConnState
 // returns a nil error.  Any other errors are currently ignored.
-func (b watcherBalancer) UpdateClientConnState(state balancer.ClientConnState) error {
+func (b *watcherBalancer) UpdateClientConnState(state balancer.ClientConnState) error {
 	for _, a := range state.ResolverState.Addresses {
 		// This hack preserves an existing behavior in our client-side
 		// load balancing where if the first address in a shuffled list
@@ -227,24 +225,24 @@ func (b watcherBalancer) UpdateClientConnState(state balancer.ClientConnState) e
 // UpdateSubConnState is called by gRPC when the state of a SubConn changes.
 //
 // Once a sub-conn is shutdown, we stop tracking it.
-func (b watcherBalancer) UpdateSubConnState(sc balancer.SubConn, state balancer.SubConnState) {
+func (b *watcherBalancer) UpdateSubConnState(sc balancer.SubConn, state balancer.SubConnState) {
 	b.log.Trace("balancer.UpdateSubConnState", "sc", sc, "state", state)
 	b.Balancer.UpdateSubConnState(sc, state)
 
-	b.lock.Lock()
-	defer b.lock.Unlock()
+	b.cc.lock.Lock()
+	defer b.cc.lock.Unlock()
 
 	// Store/update the sub-conn and its state.
-	_, ok := b.scs[sc]
+	_, ok := b.cc.scs[sc]
 	if !ok {
-		b.scs[sc] = &subConnState{}
+		b.cc.scs[sc] = &subConnState{}
 	}
-	b.scs[sc].state = state
+	b.cc.scs[sc].state = state
 
 	// Stop tracking sub-connections in shutdown state.
-	for sc, state := range b.scs {
+	for sc, state := range b.cc.scs {
 		if state.state.ConnectivityState == connectivity.Shutdown {
-			delete(b.scs, sc)
+			delete(b.cc.scs, sc)
 		}
 	}
 }
