@@ -3,7 +3,6 @@ package discovery
 import (
 	// "crypto/rand"
 	// "encoding/hex"
-	"fmt"
 
 	"github.com/hashicorp/go-hclog"
 	"google.golang.org/grpc/balancer"
