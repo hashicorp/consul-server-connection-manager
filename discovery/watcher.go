@@ -92,7 +92,7 @@ type serverState struct {
 }
 
 func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher, error) {
-	if log != nil {
+	if log == nil {
 		log = hclog.NewNullLogger()
 	}
 
