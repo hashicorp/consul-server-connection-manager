@@ -469,6 +469,7 @@ func (w *Watcher) switchServer(to Addr) error {
 	if err != nil {
 		return err
 	}
+	// FIXME: with the refactor, w.balancer is no longer set properly
 	return w.balancer.WaitForTransition(w.ctx, to)
 }
 
