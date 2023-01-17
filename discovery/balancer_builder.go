@@ -65,7 +65,8 @@ func (b *watcherBalancerBuilder) Build(cc balancer.ClientConn, opt balancer.Buil
 	}
 
 	return &watcherBalancer{
-		cc:       ccWrapper,
+		log:      b.log,
+		cc:       &ccWrapper,
 		Balancer: b.baseBuilder.Build(&ccWrapper, opt),
 	}
 }

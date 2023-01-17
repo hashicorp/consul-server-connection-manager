@@ -39,7 +39,7 @@ type watcherBalancer struct {
 
 	log hclog.Logger
 
-	cc         clientConnWrapper
+	cc         *clientConnWrapper
 	subConn    balancer.SubConn
 	state      connectivity.State
 	activeAddr resolver.Address
@@ -173,6 +173,8 @@ func (b *watcherBalancer) hasTransitioned(to Addr) error {
 // exponential backoff until a subsequent call to UpdateClientConnState
 // returns a nil error.  Any other errors are currently ignored.
 func (b *watcherBalancer) UpdateClientConnState(state balancer.ClientConnState) error {
+	b.log.Trace("watcherBalancer.UpdateClientConnState", state)
+
 	for _, a := range state.ResolverState.Addresses {
 		// This hack preserves an existing behavior in our client-side
 		// load balancing where if the first address in a shuffled list
