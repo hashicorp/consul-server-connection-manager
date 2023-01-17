@@ -9,7 +9,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/hashicorp/go-hclog"
 	"google.golang.org/grpc/balancer"
-	"google.golang.org/grpc/balancer/base"
+	// "google.golang.org/grpc/balancer/base"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/resolver"
 )
@@ -36,8 +36,13 @@ import (
 //     SHUTDOWN status.
 type watcherBalancer struct {
 	balancer.Balancer
-	// log hclog.Logger
-	log func() hclog.Logger
+
+	log hclog.Logger
+
+	cc         clientConnWrapper
+	subConn    balancer.SubConn
+	state      connectivity.State
+	activeAddr resolver.Address
 
 	// State to track sub-connections
 	lock sync.Mutex
@@ -49,26 +54,29 @@ type subConnState struct {
 	addr  resolver.Address
 }
 
+// Ensure our watcherBalancer implements the gRPC Balancer interface
 var _ balancer.Balancer = (*watcherBalancer)(nil)
-var _ base.PickerBuilder = (*watcherBalancer)(nil)
-var _ balancer.Picker = (*watcherBalancer)(nil)
 
 // wrap balancer.ClientConn in order to know the address for each sub-connection.
 type clientConnWrapper struct {
 	balancer.ClientConn
+
+	log hclog.Logger
+
 	balancer *watcherBalancer
-	// log      hclog.Logger
-	log func() hclog.Logger
 }
+
+// Ensure our clientConnWrapper implements the gRPC ClientConn interface
+var _ balancer.ClientConn = (*clientConnWrapper)(nil)
 
 // NewSubConn is called by the base Balancer when it creates a new sub connection.
 func (c *clientConnWrapper) NewSubConn(addrs []resolver.Address, opts balancer.NewSubConnOptions) (balancer.SubConn, error) {
-	c.log().Trace("clientConnWrapper.NewSubConn", "addrs", addrs)
+	c.log.Trace("clientConnWrapper.NewSubConn", "addrs", addrs)
 
 	if len(addrs) > 1 {
 		// We expect only one address per subconnection, which should always be
 		// the case for us (no nested resolver / balancer setup).
-		c.log().Error("received multiple addresses for gRPC sub-connection")
+		c.log.Error("received multiple addresses for gRPC sub-connection")
 		return nil, fmt.Errorf("invalid use of gRPC balancer; expected only one address for gRPC sub-connection")
 	}
 
@@ -85,12 +93,12 @@ func (c *clientConnWrapper) NewSubConn(addrs []resolver.Address, opts balancer.N
 
 // UpdateAddresses is called by the base Balancer when the sub connection address changes.
 func (c *clientConnWrapper) UpdateAddresses(sc balancer.SubConn, addrs []resolver.Address) {
-	c.log().Trace("clientConnWrapper.UpdateAddresses", "sub-conn", sc, "addrs", addrs)
+	c.log.Trace("clientConnWrapper.UpdateAddresses", "sub-conn", sc, "addrs", addrs)
 
 	if len(addrs) > 1 {
 		// We expect only one address per subconnection, which should always be
 		// the case for us (no nested resolver / balancer setup).
-		c.log().Error("received multiple addresses for gRPC sub-connection")
+		c.log.Error("received multiple addresses for gRPC sub-connection")
 		return
 	}
 
@@ -128,7 +136,6 @@ func (b *watcherBalancer) WaitForTransition(ctx context.Context, to Addr) error 
 
 // hasTransitioned checks if we've finished transitioning to the given address.
 func (b *watcherBalancer) hasTransitioned(to Addr) error {
-	// FIXME: why does this panic?
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
@@ -162,11 +169,66 @@ func (b *watcherBalancer) hasTransitioned(to Addr) error {
 	return nil
 }
 
+// UpdateClientConnState is called by gRPC when the state of the ClientConn
+// changes.  If the error returned is ErrBadResolverState, the ClientConn
+// will begin calling ResolveNow on the active name resolver with
+// exponential backoff until a subsequent call to UpdateClientConnState
+// returns a nil error.  Any other errors are currently ignored.
+func (b watcherBalancer) UpdateClientConnState(state balancer.ClientConnState) error {
+	for _, a := range state.ResolverState.Addresses {
+		// This hack preserves an existing behavior in our client-side
+		// load balancing where if the first address in a shuffled list
+		// of addresses matched the currently connected address, it would
+		// be an effective no-op.
+		if a.Equal(b.activeAddr) {
+			return nil
+		}
+
+		// Attempt to make a new SubConn with a single address so we can
+		// track a successful connection explicitly. If we were to pass
+		// a list of addresses, we cannot assume the first address was
+		// successful and there is no way to extract the connected address.
+		sc, err := b.cc.NewSubConn([]resolver.Address{a}, balancer.NewSubConnOptions{})
+		if err != nil {
+			b.log.Warn("balancer.customPickfirstBalancer: failed to create new SubConn: %v", err)
+			continue
+		}
+
+		// clientConnWrapper does not implement RemoveSubConn, it will be cleaned up
+		// later by UpdateSubConnState
+		// if b.subConn != nil {
+		// 	b.cc.RemoveSubConn(b.subConn)
+		// }
+
+		// Copy-pasted from pickfirstBalancer.UpdateClientConnState.
+		{
+			b.subConn = sc
+			b.state = connectivity.Idle
+			b.cc.UpdateState(balancer.State{
+				ConnectivityState: connectivity.Idle,
+				Picker:            &picker{result: balancer.PickResult{SubConn: b.subConn}},
+			})
+			b.subConn.Connect()
+		}
+
+		b.activeAddr = a
+
+		// We now have a new subConn with one address.
+		// Break the loop and call UpdateClientConnState
+		// with the full set of addresses.
+		break
+	}
+
+	// This will load the full set of addresses but leave the
+	// newly created subConn alone.
+	return b.Balancer.UpdateClientConnState(state)
+}
+
 // UpdateSubConnState is called by gRPC when the state of a SubConn changes.
 //
 // Once a sub-conn is shutdown, we stop tracking it.
-func (b *watcherBalancer) UpdateSubConnState(sc balancer.SubConn, state balancer.SubConnState) {
-	b.log().Trace("balancer.UpdateSubConnState", "sc", sc, "state", state)
+func (b watcherBalancer) UpdateSubConnState(sc balancer.SubConn, state balancer.SubConnState) {
+	b.log.Trace("balancer.UpdateSubConnState", "sc", sc, "state", state)
 	b.Balancer.UpdateSubConnState(sc, state)
 
 	b.lock.Lock()
@@ -185,42 +247,4 @@ func (b *watcherBalancer) UpdateSubConnState(sc balancer.SubConn, state balancer
 			delete(b.scs, sc)
 		}
 	}
-}
-
-// Build implements base.PickerBuilder
-//
-// This is called by the base Balancer when the set of ready sub-connections
-// has changed.
-func (b *watcherBalancer) Build(info base.PickerBuildInfo) balancer.Picker {
-	b.log().Trace("pickerBuilder.Build", "sub-conns ready", len(info.ReadySCs))
-
-	b.lock.Lock()
-	defer b.lock.Unlock()
-
-	for sc, info := range info.ReadySCs {
-		_, ok := b.scs[sc]
-		if !ok {
-			b.scs[sc] = &subConnState{}
-		}
-		b.scs[sc].addr = info.Address
-		b.scs[sc].state.ConnectivityState = connectivity.Ready
-	}
-	return b
-}
-
-// Pick implements balancer.Picker
-//
-// This is called prior to each gRPC message to choose the sub-conn to use.
-// This picks any ready sub-connection.
-func (b *watcherBalancer) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
-	b.lock.Lock()
-	defer b.lock.Unlock()
-
-	// Pick any READY address.
-	for sc, state := range b.scs {
-		if state.state.ConnectivityState == connectivity.Ready {
-			return balancer.PickResult{SubConn: sc}, nil
-		}
-	}
-	return balancer.PickResult{}, fmt.Errorf("no ready sub-connections")
 }

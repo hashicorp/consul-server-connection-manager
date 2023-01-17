@@ -175,10 +175,11 @@ func mustMakeAddr(t *testing.T, addr string, port int) Addr {
 func makeBalancerBuilder(t *testing.T, watcher *Watcher) *watcherBalancer {
 	t.Helper()
 
-	hackPolicyId := registerBalancer(func() hclog.Logger { return watcher.log })
+	// hackPolicyId := registerBalancer(func() hclog.Logger { return watcher.log })
 
-	builder := balancer.Get(hackPolicyId)
-	require.IsType(t, &balancerBuilder{}, builder)
+	// TODO: some way to not hardcode this?
+	builder := balancer.Get("consul-server-connection-manager")
+	require.IsType(t, &watcherBalancerBuilder{}, builder)
 	// bb := builder.(*balancerBuilder)
 	// require.Equal(t, watcher, bb.watcher)
 

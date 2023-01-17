@@ -21,29 +21,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-var globalBalancerLogger hclog.Logger
-var globalBalancerName string
-var globalBalancerMutex sync.RWMutex
-
-func init() {
-	globalBalancerLogger = hclog.NewNullLogger()
-	globalBalancerName = registerBalancer(getGlobalBalancerLogger)
-}
-
-func updateGlobalBalancerLogger(log hclog.Logger) {
-	globalBalancerMutex.Lock()
-	defer globalBalancerMutex.Unlock()
-
-	globalBalancerLogger = log
-}
-
-func getGlobalBalancerLogger() hclog.Logger {
-	globalBalancerMutex.RLock()
-	defer globalBalancerMutex.RUnlock()
-
-	return globalBalancerLogger
-}
-
 // State is the info a caller wants to know after initialization.
 type State struct {
 	// GRPCConn is the gRPC connection shared with this library. Use
@@ -116,18 +93,15 @@ type serverState struct {
 
 func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher, error) {
 	if log != nil {
-		// log = hclog.NewNullLogger()
-		updateGlobalBalancerLogger(log)
+		log = hclog.NewNullLogger()
 	}
 
 	config = config.withDefaults()
 
 	w := &Watcher{
-		config: config,
-		// TODO: should these use the getter, or is it okay to just fetch the
-		// logger once at init even if it gets updated globally later?
-		log:          getGlobalBalancerLogger(),
-		resolver:     newResolver(getGlobalBalancerLogger()),
+		config:       config,
+		log:          log,
+		resolver:     newResolver(log),
 		discoverer:   NewNetaddrsDiscoverer(config, log),
 		initComplete: newEvent(),
 		runComplete:  newEvent(),
@@ -171,7 +145,7 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 		// note: experimental apis
 		grpc.WithResolvers(w.resolver),
 		grpc.WithDefaultServiceConfig(
-			fmt.Sprintf(`{"loadBalancingPolicy": "%s"}`, globalBalancerName),
+			fmt.Sprintf(`{"loadBalancingPolicy": "%s"}`, "FIXME"),
 		),
 	}
 
