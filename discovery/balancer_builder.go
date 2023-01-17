@@ -21,7 +21,7 @@ func init() {
 // base.NewBalancerBuilder is not threadsafe
 func newWatcherBalancerBuilder() balancer.Builder {
 	log := hclog.New(&hclog.LoggerOptions{
-		Name: fmt.Sprintf("watcherBalancerBuilder"),
+		Name: "watcherBalancerBuilder",
 
 		// TODO: customize log level at init somehow?
 		Level: hclog.Trace,
