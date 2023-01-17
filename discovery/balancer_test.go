@@ -47,7 +47,7 @@ func TestBalancerOneAddress(t *testing.T) {
 	require.NoError(t, err)
 
 	// Initially there are no sub-connections.
-	err = blr.hasTransitioned(addr)
+	err = blr.cc.hasTransitioned(addr)
 	require.Error(t, err)
 	require.Equal(t, "no known sub-connections", err.Error())
 
@@ -208,7 +208,7 @@ func requireSubConnState(t *testing.T, wb *watcherBalancer, sc balancer.SubConn,
 	require.Equal(t, wb.cc.scs[sc].state.ConnectivityState, state)
 	require.Equal(t, wb.cc.scs[sc].addr.Addr, addr.String())
 
-	err := wb.hasTransitioned(addr)
+	err := wb.cc.hasTransitioned(addr)
 	if transitionErr != "" {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), transitionErr)

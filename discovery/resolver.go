@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/hashicorp/go-hclog"
@@ -8,8 +9,9 @@ import (
 )
 
 type watcherResolver struct {
-	cc  resolver.ClientConn
-	log hclog.Logger
+	addr Addr
+	cc   *clientConnWrapper
+	log  hclog.Logger
 }
 
 var _ resolver.Builder = (*watcherResolver)(nil)
@@ -26,7 +28,11 @@ func (r *watcherResolver) Build(target resolver.Target, cc resolver.ClientConn, 
 	if r.cc != nil {
 		return nil, fmt.Errorf("watcher does not support redialing")
 	}
-	r.cc = cc
+
+	r.cc = &clientConnWrapper{
+		rcc: cc,
+	}
+
 	return r, nil
 }
 
@@ -41,6 +47,9 @@ func (r *watcherResolver) Scheme() string {
 // After this is called, the connection will eventually complete a graceful
 // switchover to the new address.
 func (r *watcherResolver) SetAddress(addr Addr) error {
+	// Set target address for use by ResolveNow
+	r.addr = addr
+
 	if r.cc == nil {
 		// We shouldn't run into this, as long as we Dial prior to calling SetAddress.
 		return fmt.Errorf("resolver missing ClientConn")
@@ -52,7 +61,7 @@ func (r *watcherResolver) SetAddress(addr Addr) error {
 	}
 	// In case we connect to a server, and then all servers go away,
 	// support updating this to an empty list of addresses.
-	err := r.cc.UpdateState(resolver.State{Addresses: addrs})
+	err := r.cc.rcc.UpdateState(resolver.State{Addresses: addrs})
 	if err != nil {
 		r.log.Debug("gRPC resolver failed to update connection address", "error", err)
 		return err
@@ -69,4 +78,6 @@ func (r *watcherResolver) Close() {}
 // "ResolveNow will be called by gRPC to try to resolve the target name
 // again. It's just a hint, resolver can ignore this if it's not necessary.
 // It could be called multiple times concurrently."
-func (r *watcherResolver) ResolveNow(_ resolver.ResolveNowOptions) {}
+func (r *watcherResolver) ResolveNow(_ resolver.ResolveNowOptions) {
+	r.cc.WaitForTransition(context.Background(), r.addr)
+}

@@ -51,6 +51,7 @@ var _ balancer.Balancer = (*watcherBalancer)(nil)
 // wrap balancer.ClientConn in order to know the address for each sub-connection.
 type clientConnWrapper struct {
 	balancer.ClientConn
+	rcc resolver.ClientConn
 
 	log hclog.Logger
 
@@ -122,29 +123,28 @@ func (c *clientConnWrapper) UpdateAddresses(sc balancer.SubConn, addrs []resolve
 // WaitForTransition waits to see that a connection has transitioned to the
 // given address. It expects to see one sub-connection in Ready state for the
 // given address, and all other sub-connections (if any) in Shutdown state.
-func (b *watcherBalancer) WaitForTransition(ctx context.Context, to Addr) error {
+func (c *clientConnWrapper) WaitForTransition(ctx context.Context, to Addr) error {
 	// 50 * 200ms = 10s
 	var bo backoff.BackOff = backoff.NewConstantBackOff(200 * time.Millisecond)
 	bo = backoff.WithMaxRetries(bo, 50)
 	bo = backoff.WithContext(bo, ctx)
 
 	// wait until we have the sub conns we are interested in.
-	return backoff.Retry(func() error { return b.hasTransitioned(to) }, bo)
+	return backoff.Retry(func() error { return c.hasTransitioned(to) }, bo)
 }
 
 // hasTransitioned checks if we've finished transitioning to the given address.
-func (b *watcherBalancer) hasTransitioned(to Addr) error {
-	// FIXME: this panics because w.balancer is not initialized anymore
-	b.cc.lock.Lock()
-	defer b.cc.lock.Unlock()
+func (c *clientConnWrapper) hasTransitioned(to Addr) error {
+	c.lock.Lock()
+	defer c.lock.Unlock()
 
-	if len(b.cc.scs) == 0 {
+	if len(c.scs) == 0 {
 		return fmt.Errorf("no known sub-connections")
 	}
 
 	foundTarget := false
 	var targetState connectivity.State
-	for _, state := range b.cc.scs {
+	for _, state := range c.scs {
 		if state.addr.Addr == to.String() {
 			foundTarget = true
 

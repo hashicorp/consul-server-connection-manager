@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/resolver"
 	"google.golang.org/grpc/status"
 )
 
@@ -471,8 +472,8 @@ func (w *Watcher) switchServer(to Addr) error {
 	if err != nil {
 		return err
 	}
-	// FIXME: with the refactor, w.balancer is no longer set properly
-	return w.balancer.WaitForTransition(w.ctx, to)
+	w.resolver.ResolveNow(resolver.ResolveNowOptions{})
+	return nil
 }
 
 // requestServerSwitch requests a switch to some other server. This is safe to
