@@ -19,6 +19,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
+
+	"github.com/hashicorp/consul-server-connection-manager/discovery/balancer"
 )
 
 // State is the info a caller wants to know after initialization.
@@ -68,7 +70,6 @@ type Watcher struct {
 	token atomic.Value
 
 	resolver *watcherResolver
-	balancer *watcherBalancer
 
 	acls *ACLs
 
@@ -145,7 +146,7 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 		// note: experimental apis
 		grpc.WithResolvers(w.resolver),
 		grpc.WithDefaultServiceConfig(
-			fmt.Sprintf(`{"loadBalancingPolicy": "%s"}`, registerBalancer(w, log)),
+			fmt.Sprintf(`{"loadBalancingPolicy": "%s"}`, balancer.PickFirstBalancerName),
 		),
 	}
 
@@ -465,11 +466,7 @@ func (w *Watcher) switchServer(to Addr) error {
 	w.switchLock.Lock()
 	defer w.switchLock.Unlock()
 
-	err := w.resolver.SetAddress(to)
-	if err != nil {
-		return err
-	}
-	return w.balancer.WaitForTransition(w.ctx, to)
+	return w.resolver.SetAddress(to)
 }
 
 // requestServerSwitch requests a switch to some other server. This is safe to
@@ -550,7 +547,7 @@ func (w *Watcher) watchStream(addrs *addrSet) error {
 			return err
 		}
 
-		// Collect addresses from from the stream.
+		// Collect addresses from the stream.
 		streamAddrs := []Addr{}
 		for _, srv := range resp.Servers {
 			addr, err := w.nodeToAddrFn(srv.Id, srv.Address)
