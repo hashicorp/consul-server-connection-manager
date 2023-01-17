@@ -134,6 +134,7 @@ func (b *watcherBalancer) WaitForTransition(ctx context.Context, to Addr) error 
 
 // hasTransitioned checks if we've finished transitioning to the given address.
 func (b *watcherBalancer) hasTransitioned(to Addr) error {
+	// FIXME: this panics because w.balancer is not initialized anymore
 	b.cc.lock.Lock()
 	defer b.cc.lock.Unlock()
 
@@ -173,7 +174,7 @@ func (b *watcherBalancer) hasTransitioned(to Addr) error {
 // exponential backoff until a subsequent call to UpdateClientConnState
 // returns a nil error.  Any other errors are currently ignored.
 func (b *watcherBalancer) UpdateClientConnState(state balancer.ClientConnState) error {
-	b.log.Trace("watcherBalancer.UpdateClientConnState", state)
+	b.log.Trace("balancer.UpdateClientConnState", "state", state)
 
 	for _, a := range state.ResolverState.Addresses {
 		// This hack preserves an existing behavior in our client-side

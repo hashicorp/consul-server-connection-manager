@@ -145,13 +145,15 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 		// note: experimental apis
 		grpc.WithResolvers(w.resolver),
 		grpc.WithDefaultServiceConfig(
-			fmt.Sprintf(`{"loadBalancingPolicy": "%s"}`, "FIXME"),
+			fmt.Sprintf(`{"loadBalancingPolicy": "%s"}`, "consul-server-connection-manager"),
 		),
 	}
 
 	// Dial with "consul://" to trigger our custom resolver. We don't
 	// provide a server address. The connection will be updated by the
 	// Watcher via the custom resolver once an address is known.
+	//
+	// FIXME: need to add a ref from the watcher to either the balancer or clientConnWrapper somehow
 	conn, err := grpc.DialContext(w.ctx, "consul://", dialOpts...)
 	if err != nil {
 		return nil, err
