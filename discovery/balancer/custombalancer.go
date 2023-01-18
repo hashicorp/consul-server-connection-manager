@@ -21,7 +21,7 @@ func newCustomPickfirstBuilder() balancer.Builder {
 
 type customPickfirstBuilder struct{}
 
-func (*customPickfirstBuilder) Build(cc balancer.ClientConn, opt balancer.BuildOptions) balancer.Balancer {
+func (*customPickfirstBuilder) Build(cc balancer.ClientConn, _ balancer.BuildOptions) balancer.Balancer {
 	return &customPickfirstBalancer{
 		pickfirstBalancer: pickfirstBalancer{cc: cc},
 	}
@@ -45,7 +45,7 @@ func (b *customPickfirstBalancer) UpdateClientConnState(state balancer.ClientCon
 		// of addresses matched the currently connected address, it would
 		// be an effective no-op.
 		if a.Equal(b.activeAddr) {
-			return nil
+			break
 		}
 
 		// Attempt to make a new SubConn with a single address so we can
