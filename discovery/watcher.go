@@ -15,12 +15,13 @@ import (
 	"github.com/hashicorp/go-hclog"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 
-	"github.com/hashicorp/consul-server-connection-manager/discovery/balancer"
+	_ "github.com/hashicorp/consul-server-connection-manager/discovery/balancer"
 )
 
 // State is the info a caller wants to know after initialization.
@@ -145,9 +146,7 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 		}),
 		// note: experimental apis
 		grpc.WithResolvers(w.resolver),
-		grpc.WithDefaultServiceConfig(
-			fmt.Sprintf(`{"loadBalancingPolicy": "%s"}`, balancer.PickFirstBalancerName),
-		),
+		grpc.WithDefaultServiceConfig(`{"loadBalancingPolicy":"pick_first_custom"}`),
 	}
 
 	// Dial with "consul://" to trigger our custom resolver. We don't
@@ -466,7 +465,11 @@ func (w *Watcher) switchServer(to Addr) error {
 	w.switchLock.Lock()
 	defer w.switchLock.Unlock()
 
-	return w.resolver.SetAddress(to)
+	if err := w.resolver.SetAddress(to); err != nil {
+		return err
+	}
+	w.conn.WaitForStateChange(w.ctxForSwitch, connectivity.Idle)
+	return nil
 }
 
 // requestServerSwitch requests a switch to some other server. This is safe to
