@@ -15,13 +15,10 @@ import (
 	"github.com/hashicorp/go-hclog"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
-
-	_ "github.com/hashicorp/consul-server-connection-manager/discovery/balancer"
 )
 
 // State is the info a caller wants to know after initialization.
@@ -146,7 +143,6 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 		}),
 		// note: experimental apis
 		grpc.WithResolvers(w.resolver),
-		grpc.WithDefaultServiceConfig(`{"loadBalancingPolicy":"pick_first_custom"}`),
 	}
 
 	// Dial with "consul://" to trigger our custom resolver. We don't
@@ -455,21 +451,13 @@ func (w *Watcher) connect(addr Addr) (serverState, error) {
 	return serverState{addr: addr, dataplaneFeatures: features}, nil
 }
 
-// switchServer updates the gRPC connection to use the given server. It blocks
-// until the connection has switched over to the new server and is no longer
-// trying to use any "old" server(s). We want to be pretty sure that, after
-// this returns, the gRPC connection will send requests to the given server,
-// since the actual address the conection is using is abstracted away.
+// switchServer updates the gRPC connection to use the given server.
 func (w *Watcher) switchServer(to Addr) error {
 	w.log.Trace("Watcher.switchServer", "to", to)
 	w.switchLock.Lock()
 	defer w.switchLock.Unlock()
 
-	if err := w.resolver.SetAddress(to); err != nil {
-		return err
-	}
-	w.conn.WaitForStateChange(w.ctxForSwitch, connectivity.Idle)
-	return nil
+	return w.resolver.SetAddress(to)
 }
 
 // requestServerSwitch requests a switch to some other server. This is safe to
