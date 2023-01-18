@@ -65,6 +65,7 @@ func (b *customPickfirstBalancer) UpdateClientConnState(state balancer.ClientCon
 		// Copy-pasted from pickfirstBalancer.UpdateClientConnState.
 		{
 			b.subConn = sc
+			logger.Info("setting state to IDLE")
 			b.state = connectivity.Idle
 			b.cc.UpdateState(balancer.State{
 				ConnectivityState: connectivity.Idle,
