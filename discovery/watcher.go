@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/consul/proto-public/pbserverdiscovery"
 	"github.com/hashicorp/go-hclog"
 	"google.golang.org/grpc"
+	backoff2 "google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -143,6 +144,10 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 		}),
 		// note: experimental apis
 		grpc.WithResolvers(w.resolver),
+		grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff:           backoff2.DefaultConfig,
+			MinConnectTimeout: 10 * time.Second,
+		}),
 	}
 
 	// Dial with "consul://" to trigger our custom resolver. We don't
