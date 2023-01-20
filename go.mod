@@ -7,7 +7,7 @@ require (
 	github.com/cenkalti/backoff/v4 v4.1.3
 	github.com/google/go-cmp v0.5.7
 	github.com/hashicorp/consul/proto-public v0.1.0
-	github.com/hashicorp/consul/sdk v0.12.0
+	github.com/hashicorp/consul/sdk v0.13.0
 	github.com/hashicorp/go-hclog v1.2.2
 	github.com/hashicorp/go-netaddrs v0.1.0
 	github.com/stretchr/testify v1.7.2
@@ -23,6 +23,7 @@ require (
 	github.com/hashicorp/go-cleanhttp v0.5.1 // indirect
 	github.com/hashicorp/go-immutable-radix v1.0.0 // indirect
 	github.com/hashicorp/go-uuid v1.0.1 // indirect
+	github.com/hashicorp/go-version v1.2.1 // indirect
 	github.com/hashicorp/golang-lru v0.5.0 // indirect
 	github.com/kr/pretty v0.2.1 // indirect
 	github.com/kr/text v0.2.0 // indirect

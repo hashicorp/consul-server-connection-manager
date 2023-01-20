@@ -12,7 +12,7 @@ address, so that callers of the library do not need to rebuild their gRPC client
 ## Custom gRPC resolver
 
 We use a custom gRPC resolver to update the address the gRPC connection is using. 
-The Watcher tracks known addresses and uses the resolver to set the address on the gRPC connection.
+The Watcher tracks known addresses and uses the resolver to set a single address on the gRPC connection.
 When the gRPC connection is first created using `grpc.Dial`, it initially has no address:
 
 ```go

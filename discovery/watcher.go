@@ -148,6 +148,10 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 			Backoff:           backoff2.DefaultConfig,
 			MinConnectTimeout: 10 * time.Second,
 		}),
+		// Note: We rely on the behavior of the default pick_first balancer [1]
+		// to track the currently active address. Update loadBalancing policy with caution.
+		//
+		// [1]: https://github.com/grpc/grpc/blob/master/doc/load-balancing.md#pick_first
 	}
 
 	// Dial with "consul://" to trigger our custom resolver. We don't
@@ -414,7 +418,6 @@ func (w *Watcher) connect(addr Addr) (serverState, error) {
 	if err != nil {
 		return serverState{}, fmt.Errorf("failed to switch to Consul server %q: %w", addr, err)
 	}
-	w.log.Debug("switched to Consul server successfully", "address", addr)
 
 	// One time, do the ACL token login.
 	select {
@@ -457,6 +460,13 @@ func (w *Watcher) connect(addr Addr) (serverState, error) {
 }
 
 // switchServer updates the gRPC connection to use the given server.
+// If switchServer returns without error, we are guaranteed that
+// subsequent gRPC requests will not use the old subconnection because
+// the [pick_first] balancer synchronously removes the subconnection
+// before establishing a new one. The subsequent request will block until
+// the new subconnection is ready.
+//
+// [pick_first]: https://github.com/grpc/grpc/blob/master/doc/load-balancing.md#pick_first
 func (w *Watcher) switchServer(to Addr) error {
 	w.log.Trace("Watcher.switchServer", "to", to)
 	w.switchLock.Lock()
