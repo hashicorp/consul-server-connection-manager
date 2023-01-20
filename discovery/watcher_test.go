@@ -77,22 +77,16 @@ func TestRun(t *testing.T) {
 			}
 		}
 
-		// The gRPC balancer registry is global and not thread safe. gRPC starts goroutine(s)
-		// that read from the balancer registry when building balancers, and expects all writes
-		// to the registry to occur synchronously upfront in an init() function.
-		//
-		// To avoid the race detector in parallel tests, we must have all balancer.Register calls
-		// that write to the registry happen prior to starting any Watchers. This means we must
-		// construct all Watchers first, synchronously and before Watcher.Run called.
-		w, err := NewWatcher(ctx, c.config, hclog.New(&hclog.LoggerOptions{
-			Name:  fmt.Sprintf("watcher/%s", name),
-			Level: hclog.Debug,
-		}))
-		require.NoError(t, err)
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
 			servers := startConsulServers(t, 3, c.serverConfigFn)
+
+			w, err := NewWatcher(ctx, c.config, hclog.New(&hclog.LoggerOptions{
+				Name:  fmt.Sprintf("watcher/%s", name),
+				Level: hclog.Debug,
+			}))
+			require.NoError(t, err)
 
 			// To test with local Consul servers, we inject custom server ports. The Config struct,
 			// go-netaddrs, and the server watch stream do not support per-server ports.
@@ -367,4 +361,10 @@ func enableACLsConfigFn(c *testutil.TestServerConfig) {
 	c.ACL.Enabled = true
 	c.ACL.Tokens.InitialManagement = testServerManagementToken
 	c.ACL.DefaultPolicy = "deny"
+}
+
+func mustMakeAddr(t *testing.T, addr string, port int) Addr {
+	a, err := MakeAddr(addr, port)
+	require.NoError(t, err)
+	return a
 }

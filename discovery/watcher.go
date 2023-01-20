@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/consul/proto-public/pbserverdiscovery"
 	"github.com/hashicorp/go-hclog"
 	"google.golang.org/grpc"
+	backoff2 "google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -68,7 +69,6 @@ type Watcher struct {
 	token atomic.Value
 
 	resolver *watcherResolver
-	balancer *watcherBalancer
 
 	acls *ACLs
 
@@ -144,9 +144,14 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 		}),
 		// note: experimental apis
 		grpc.WithResolvers(w.resolver),
-		grpc.WithDefaultServiceConfig(
-			fmt.Sprintf(`{"loadBalancingPolicy": "%s"}`, registerBalancer(w, log)),
-		),
+		grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff:           backoff2.DefaultConfig,
+			MinConnectTimeout: 10 * time.Second,
+		}),
+		// Note: We rely on the behavior of the default pick_first balancer [1]
+		// to track the currently active address. Update loadBalancing policy with caution.
+		//
+		// [1]: https://github.com/grpc/grpc/blob/master/doc/load-balancing.md#pick_first
 	}
 
 	// Dial with "consul://" to trigger our custom resolver. We don't
@@ -413,7 +418,6 @@ func (w *Watcher) connect(addr Addr) (serverState, error) {
 	if err != nil {
 		return serverState{}, fmt.Errorf("failed to switch to Consul server %q: %w", addr, err)
 	}
-	w.log.Debug("switched to Consul server successfully", "address", addr)
 
 	// One time, do the ACL token login.
 	select {
@@ -455,21 +459,20 @@ func (w *Watcher) connect(addr Addr) (serverState, error) {
 	return serverState{addr: addr, dataplaneFeatures: features}, nil
 }
 
-// switchServer updates the gRPC connection to use the given server. It blocks
-// until the connection has switched over to the new server and is no longer
-// trying to use any "old" server(s). We want to be pretty sure that, after
-// this returns, the gRPC connection will send requests to the given server,
-// since the actual address the conection is using is abstracted away.
+// switchServer updates the gRPC connection to use the given server.
+// If switchServer returns without error, we are guaranteed that
+// subsequent gRPC requests will not use the old subconnection because
+// the [pick_first] balancer synchronously removes the subconnection
+// before establishing a new one. The subsequent request will block until
+// the new subconnection is ready.
+//
+// [pick_first]: https://github.com/grpc/grpc/blob/master/doc/load-balancing.md#pick_first
 func (w *Watcher) switchServer(to Addr) error {
 	w.log.Trace("Watcher.switchServer", "to", to)
 	w.switchLock.Lock()
 	defer w.switchLock.Unlock()
 
-	err := w.resolver.SetAddress(to)
-	if err != nil {
-		return err
-	}
-	return w.balancer.WaitForTransition(w.ctx, to)
+	return w.resolver.SetAddress(to)
 }
 
 // requestServerSwitch requests a switch to some other server. This is safe to
@@ -550,7 +553,7 @@ func (w *Watcher) watchStream(addrs *addrSet) error {
 			return err
 		}
 
-		// Collect addresses from from the stream.
+		// Collect addresses from the stream.
 		streamAddrs := []Addr{}
 		for _, srv := range resp.Servers {
 			addr, err := w.nodeToAddrFn(srv.Id, srv.Address)
