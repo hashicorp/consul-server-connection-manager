@@ -80,13 +80,14 @@ func TestRun(t *testing.T) {
 			}
 		}
 
+		n := name
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
 			servers := startConsulServers(t, 3, c.serverConfigFn)
 
 			w, err := NewWatcher(ctx, c.config, hclog.New(&hclog.LoggerOptions{
-				Name:  fmt.Sprintf("watcher/%s", name),
+				Name:  fmt.Sprintf("watcher/%s", n),
 				Level: hclog.Debug,
 			}))
 			require.NoError(t, err)
