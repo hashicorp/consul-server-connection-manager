@@ -9,7 +9,7 @@ import (
 
 	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-hclog"
-	netaddrs "github.com/hashicorp/go-netaddrs"
+	"github.com/hashicorp/go-netaddrs"
 )
 
 type Discoverer interface {
