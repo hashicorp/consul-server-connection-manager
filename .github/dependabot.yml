@@ -1,0 +1,19 @@
+# Copyright (c) HashiCorp, Inc.
+# SPDX-License-Identifier: MPL-2.0
+
+version: 2
+updates:
+- package-ecosystem: gomod
+  open-pull-requests-limit: 10
+  directory: "/"
+  labels:
+    - "dependencies"
+  schedule:
+    interval: weekly
+- package-ecosystem: github-actions
+  open-pull-requests-limit: 5
+  directory: /
+  labels:
+    - "dependencies"
+  schedule:
+    interval: weekly
