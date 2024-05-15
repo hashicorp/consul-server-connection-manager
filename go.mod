@@ -4,7 +4,7 @@ go 1.20
 
 require (
 	github.com/armon/go-metrics v0.4.1
-	github.com/cenkalti/backoff/v4 v4.1.3
+	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/google/go-cmp v0.5.9
 	github.com/hashicorp/consul/proto-public v0.1.0
 	github.com/hashicorp/consul/sdk v0.13.0
