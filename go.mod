@@ -5,13 +5,13 @@ go 1.20
 require (
 	github.com/armon/go-metrics v0.4.1
 	github.com/cenkalti/backoff/v4 v4.1.3
-	github.com/google/go-cmp v0.5.9
+	github.com/google/go-cmp v0.6.0
 	github.com/hashicorp/consul/proto-public v0.1.0
 	github.com/hashicorp/consul/sdk v0.13.0
 	github.com/hashicorp/go-hclog v1.2.2
 	github.com/hashicorp/go-netaddrs v0.1.0
 	github.com/stretchr/testify v1.9.0
-	google.golang.org/grpc v1.56.3
+	google.golang.org/grpc v1.64.0
 )
 
 require (
