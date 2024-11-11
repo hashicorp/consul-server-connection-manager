@@ -6,7 +6,7 @@ package discovery
 import (
 	"context"
 
-	"github.com/armon/go-metrics"
+	"github.com/hashicorp/go-metrics/compat"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"

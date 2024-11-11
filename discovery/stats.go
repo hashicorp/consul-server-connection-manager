@@ -3,7 +3,7 @@
 
 package discovery
 
-import "github.com/armon/go-metrics/prometheus"
+import "github.com/hashicorp/go-metrics/compat/prometheus"
 
 var Summaries = []prometheus.SummaryDefinition{
 	{
