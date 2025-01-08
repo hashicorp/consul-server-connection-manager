@@ -8,7 +8,7 @@ require (
 	github.com/hashicorp/consul/proto-public v0.6.2
 	github.com/hashicorp/consul/sdk v0.16.1
 	github.com/hashicorp/go-hclog v1.5.0
-	github.com/hashicorp/go-metrics v0.5.4-0.20241111182750-ceaacca141e7
+	github.com/hashicorp/go-metrics v0.5.4
 	github.com/hashicorp/go-netaddrs v0.1.0
 	github.com/stretchr/testify v1.9.0
 	google.golang.org/grpc v1.56.3
