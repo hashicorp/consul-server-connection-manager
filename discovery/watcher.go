@@ -11,11 +11,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/armon/go-metrics"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/hashicorp/consul/proto-public/pbdataplane"
 	"github.com/hashicorp/consul/proto-public/pbserverdiscovery"
 	"github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/go-metrics/compat"
 	"google.golang.org/grpc"
 	backoff2 "google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"

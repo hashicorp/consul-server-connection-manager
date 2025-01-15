@@ -56,7 +56,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@aaa42aa0628b4ae2578232a66b541047968fac86 # v6.1.0
         with:
-          version: v1.57.2
+          version: v1.63.4
 
   # This is job is required for branch protection as a required GitHub check
   # because GitHub actions show up as checks at the job level and not the
