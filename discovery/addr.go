@@ -34,7 +34,7 @@ func (a Addr) String() string {
 }
 
 func (a Addr) Empty() bool {
-	return len(a.TCPAddr.IP) == 0
+	return len(a.IP) == 0
 }
 
 // addrSet represents a set of addresses. For each address it can track the
