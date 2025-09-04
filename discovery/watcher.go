@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"google.golang.org/grpc/resolver"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -146,7 +147,6 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 			Timeout: 30 * time.Second,
 		}),
 		// note: experimental apis
-		grpc.WithResolvers(w.resolver),
 		grpc.WithConnectParams(grpc.ConnectParams{
 			Backoff:           backoff2.DefaultConfig,
 			MinConnectTimeout: 10 * time.Second,
@@ -156,6 +156,8 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 		//
 		// [1]: https://github.com/grpc/grpc/blob/master/doc/load-balancing.md#pick_first
 	}
+
+	resolver.Register(w.resolver)
 
 	// Dial with "consul://" to trigger our custom resolver. We don't
 	// provide a server address. The connection will be updated by the
