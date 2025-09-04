@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	expcredentials "google.golang.org/grpc/experimental/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 )
@@ -119,7 +120,7 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 
 	var cred credentials.TransportCredentials
 	if tls := w.config.TLS; tls != nil {
-		cred = credentials.NewTLS(tls)
+		cred = expcredentials.NewTLSWithALPNDisabled(tls)
 	} else {
 		cred = insecure.NewCredentials()
 	}
