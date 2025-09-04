@@ -160,7 +160,7 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 	// Dial with "consul://" to trigger our custom resolver. We don't
 	// provide a server address. The connection will be updated by the
 	// Watcher via the custom resolver once an address is known.
-	conn, err := grpc.DialContext(w.ctx, "consul://", dialOpts...)
+	conn, err := grpc.NewClient("consul://", dialOpts...)
 	if err != nil {
 		return nil, err
 	}
