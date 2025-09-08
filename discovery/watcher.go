@@ -164,6 +164,7 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 	if err != nil {
 		return nil, err
 	}
+
 	w.conn = conn
 
 	return w, nil
@@ -414,6 +415,8 @@ func (w *Watcher) nextServer(addrs *addrSet) error {
 // only) and grabbing dataplane features for this server.
 func (w *Watcher) connect(addr Addr) (serverState, error) {
 	w.log.Trace("Watcher.connect", "addr", addr)
+
+	w.conn.Connect()
 
 	// Tell the gRPC connection to switch to the selected server.
 	w.log.Debug("switching to Consul server", "address", addr)
