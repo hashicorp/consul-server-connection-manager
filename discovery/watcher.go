@@ -160,7 +160,9 @@ func NewWatcher(ctx context.Context, config Config, log hclog.Logger) (*Watcher,
 	// Dial with "consul://" to trigger our custom resolver. We don't
 	// provide a server address. The connection will be updated by the
 	// Watcher via the custom resolver once an address is known.
-	conn, err := grpc.NewClient("consul://", dialOpts...)
+	//nolint:staticcheck
+	// We want to retain the legacy behavior of grpc.DialContext.
+	conn, err := grpc.DialContext(ctx, "consul://", dialOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -415,8 +417,6 @@ func (w *Watcher) nextServer(addrs *addrSet) error {
 // only) and grabbing dataplane features for this server.
 func (w *Watcher) connect(addr Addr) (serverState, error) {
 	w.log.Trace("Watcher.connect", "addr", addr)
-
-	w.conn.Connect()
 
 	// Tell the gRPC connection to switch to the selected server.
 	w.log.Debug("switching to Consul server", "address", addr)
