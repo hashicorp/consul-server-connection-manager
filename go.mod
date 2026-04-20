@@ -3,7 +3,7 @@ module github.com/hashicorp/consul-server-connection-manager
 go 1.25.0
 
 require (
-	github.com/cenkalti/backoff/v4 v4.1.3
+	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/google/go-cmp v0.7.0
 	github.com/hashicorp/consul/proto-public v0.6.4
 	github.com/hashicorp/consul/sdk v0.16.2
