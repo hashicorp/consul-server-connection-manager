@@ -7,7 +7,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/hashicorp/consul/proto-public v0.6.4
 	github.com/hashicorp/consul/sdk v0.16.2
-	github.com/hashicorp/go-hclog v1.5.0
+	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-metrics v0.5.4
 	github.com/hashicorp/go-netaddrs v0.1.0
 	github.com/stretchr/testify v1.11.1
