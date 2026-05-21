@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/consul-server-connection-manager/mocks"
-	"github.com/hashicorp/consul/proto-public/pbacl"
+	"github.com/hashicorp/consul/proto-public/v2/pbacl"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )

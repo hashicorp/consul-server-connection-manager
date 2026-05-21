@@ -3,8 +3,8 @@
 
 package mocks
 
-import "github.com/hashicorp/consul/proto-public/pbacl"
+import "github.com/hashicorp/consul/proto-public/v2/pbacl"
 
-//go:generate mockery --srcpkg "github.com/hashicorp/consul/proto-public/pbacl" --name ACLServiceClient --output .
+//go:generate mockery --srcpkg "github.com/hashicorp/consul/proto-public/v2/pbacl" --name ACLServiceClient --output .
 
 var _ pbacl.ACLServiceClient = &ACLServiceClient{}

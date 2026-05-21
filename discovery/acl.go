@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hashicorp/consul/proto-public/pbacl"
+	"github.com/hashicorp/consul/proto-public/v2/pbacl"
 	"github.com/hashicorp/go-metrics/compat"
 	"google.golang.org/grpc"
 )
