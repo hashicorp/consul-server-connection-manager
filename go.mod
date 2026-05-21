@@ -1,12 +1,12 @@
 module github.com/hashicorp/consul-server-connection-manager
 
-go 1.25.0
+go 1.26
 
 require (
 	github.com/cenkalti/backoff/v4 v4.1.3
 	github.com/google/go-cmp v0.7.0
-	github.com/hashicorp/consul/proto-public v0.6.4
-	github.com/hashicorp/consul/sdk v0.16.2
+	github.com/hashicorp/consul/proto-public/v2 v2.0.0
+	github.com/hashicorp/consul/sdk/v2 v2.0.0
 	github.com/hashicorp/go-hclog v1.5.0
 	github.com/hashicorp/go-metrics v0.5.4
 	github.com/hashicorp/go-netaddrs v0.1.0
@@ -26,6 +26,7 @@ require (
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
 	github.com/hashicorp/go-version v1.2.1 // indirect
 	github.com/hashicorp/golang-lru v0.5.0 // indirect
+	github.com/kr/text v0.2.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
@@ -36,10 +37,12 @@ require (
 	github.com/prometheus/common v0.26.0 // indirect
 	github.com/prometheus/procfs v0.6.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
-	golang.org/x/net v0.48.0 // indirect
-	golang.org/x/sys v0.39.0 // indirect
-	golang.org/x/text v0.32.0 // indirect
+	go.opentelemetry.io/otel/metric v1.42.0 // indirect
+	go.opentelemetry.io/otel/trace v1.42.0 // indirect
+	golang.org/x/net v0.51.0 // indirect
+	golang.org/x/sys v0.41.0 // indirect
+	golang.org/x/text v0.34.0 // indirect
 	google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1 // indirect
-	google.golang.org/protobuf v1.36.10 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

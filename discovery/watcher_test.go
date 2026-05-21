@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/hashicorp/consul/proto-public/pbdataplane"
-	"github.com/hashicorp/consul/proto-public/pbserverdiscovery"
-	"github.com/hashicorp/consul/sdk/testutil"
+	"github.com/hashicorp/consul/proto-public/v2/pbdataplane"
+	"github.com/hashicorp/consul/proto-public/v2/pbserverdiscovery"
+	"github.com/hashicorp/consul/sdk/v2/testutil"
 	"github.com/hashicorp/go-hclog"
 	"github.com/stretchr/testify/require"
 )
