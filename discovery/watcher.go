@@ -15,7 +15,7 @@ import (
 	"github.com/hashicorp/consul/proto-public/v2/pbdataplane"
 	"github.com/hashicorp/consul/proto-public/v2/pbserverdiscovery"
 	"github.com/hashicorp/go-hclog"
-	"github.com/hashicorp/go-metrics/compat"
+	metrics "github.com/hashicorp/go-metrics/compat"
 	"google.golang.org/grpc"
 	backoff2 "google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"

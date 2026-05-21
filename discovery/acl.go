@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/consul/proto-public/v2/pbacl"
-	"github.com/hashicorp/go-metrics/compat"
+	metrics "github.com/hashicorp/go-metrics/compat"
 	"google.golang.org/grpc"
 )
 
