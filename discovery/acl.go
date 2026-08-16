@@ -74,6 +74,18 @@ func (a *ACLs) Login(ctx context.Context) (string, string, error) {
 	return a.token.AccessorId, a.token.SecretId, nil
 }
 
+// Reset discards the cached token so that a subsequent Login is allowed.
+// Without this, Login returns ErrAlreadyLoggedIn for the lifetime of the
+// process, so a token that is deleted in Consul can never be replaced.
+//
+// Call this when Consul rejects the token with codes.Unauthenticated, which
+// means the token no longer exists server-side and a fresh login is required.
+func (a *ACLs) Reset() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.token = nil
+}
+
 func (a *ACLs) Logout(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()

@@ -102,4 +102,13 @@ func interceptError(watcher *Watcher, err error) {
 		watcher.log.Debug("saw gRPC ResourceExhausted status code")
 		watcher.requestServerSwitch()
 	}
+
+	// An Unauthenticated response means the ACL token we are presenting no
+	// longer exists in Consul, typically because it was deleted out from under
+	// us. Obtain a new one, otherwise every subsequent request on this
+	// connection keeps failing with the same unusable credentials.
+	if s.Code() == codes.Unauthenticated {
+		watcher.log.Debug("saw gRPC Unauthenticated status code")
+		watcher.reloginOnUnauthenticated()
+	}
 }

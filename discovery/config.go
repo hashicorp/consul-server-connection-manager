@@ -23,6 +23,8 @@ const (
 const (
 	DefaultServerWatchDisabledInterval = 1 * time.Minute
 
+	DefaultMinReloginInterval = 30 * time.Second
+
 	DefaultBackOffInitialInterval     = 500 * time.Millisecond
 	DefaultBackOffMaxInterval         = 60 * time.Second
 	DefaultBackOffMultiplier          = 1.5
@@ -79,11 +81,28 @@ type Config struct {
 	Credentials Credentials
 
 	BackOff BackOffConfig
+
+	// MinReloginInterval is the minimum time between auth method re-logins
+	// triggered by an Unauthenticated response from Consul. It rate limits
+	// re-login attempts so that a burst of rejected requests, or a bearer
+	// token that is itself invalid, cannot turn into a login storm against
+	// the auth method.
+	//
+	// This only applies to Credentials.Type == CredentialsTypeLogin.
+	// Defaults to DefaultMinReloginInterval.
+	MinReloginInterval time.Duration
 }
 
 func (c Config) withDefaults() Config {
 	if c.ServerWatchDisabledInterval == 0 {
 		c.ServerWatchDisabledInterval = DefaultServerWatchDisabledInterval
+	}
+
+	// A negative value is treated as unset rather than as "no rate limit", so
+	// that a misconfiguration cannot remove the only protection against a
+	// login storm.
+	if c.MinReloginInterval <= 0 {
+		c.MinReloginInterval = DefaultMinReloginInterval
 	}
 
 	// Infer the ServerName field if a hostname is used in Addresses.

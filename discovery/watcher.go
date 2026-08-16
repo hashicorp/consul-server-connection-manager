@@ -60,6 +60,18 @@ type Watcher struct {
 	cancelForSwitch context.CancelFunc
 	switchLock      sync.Mutex
 
+	// reloginLock serializes auth method re-logins, and lastRelogin records when
+	// the most recent one was attempted so that they can be rate limited.
+	// Guarded the same way as switchLock, with a non-blocking TryLock, so that
+	// a burst of Unauthenticated responses collapses into a single re-login.
+	//
+	// lastRelogin records attempts rather than successes, so that a bearer
+	// token Consul keeps rejecting is rate limited too. It deliberately does
+	// not track the initial login performed by connect(), since rate limiting
+	// the first recovery would defeat the purpose.
+	reloginLock sync.Mutex
+	lastRelogin time.Time
+
 	config Config
 	log    hclog.Logger
 
@@ -436,27 +448,52 @@ func (w *Watcher) connect(addr Addr) (serverState, error) {
 			case CredentialsTypeStatic:
 				w.token.Store(w.config.Credentials.Static.Token)
 			case CredentialsTypeLogin:
+				// Guarded because the gRPC error interceptor may read w.acls
+				// concurrently in order to trigger a re-login.
+				w.reloginLock.Lock()
 				if w.acls == nil {
 					w.acls = newACLs(w.conn, w.config)
 				}
-				accessorId, secretId, err := w.acls.Login(w.ctx)
+				acls := w.acls
+				w.reloginLock.Unlock()
+
+				accessorId, secretId, err := acls.Login(w.ctx)
 				if err != nil {
 					if err != ErrAlreadyLoggedIn {
 						w.log.Error("ACL auth method login failed", "error", err)
 						return serverState{}, err
 					}
+					// A concurrent re-login already obtained a token and stored
+					// it in w.token. secretId is empty in this case, so it must
+					// not be stored: doing so would discard that token and leave
+					// the Watcher with no credentials at all.
+					w.log.Debug("ACL auth method login skipped; already logged in")
 				} else {
 					w.log.Info("ACL auth method login succeeded", "accessorID", accessorId)
+					w.token.Store(secretId)
 				}
-				w.token.Store(secretId)
 			}
 		}
 	}
 
-	// Fetch dataplane features for this server.
+	// Fetch dataplane features for this server. This is the first request that
+	// uses the token we just obtained, so it is where a token that was deleted
+	// between login and first use surfaces, as codes.Unauthenticated.
+	//
+	// Recover by discarding the cached credentials and logging in again. Without
+	// this, the caller's retry loop would keep presenting the same dead token
+	// indefinitely, because both w.token and ACLs.token are still populated and
+	// suppress any further login attempt.
+	staleToken, _ := w.token.Load().(string)
 	features, err := w.getDataplaneFeatures()
 	if err != nil {
-		return serverState{}, err
+		if !w.recoverFromUnauthenticated(err, staleToken) {
+			return serverState{}, err
+		}
+		features, err = w.getDataplaneFeatures()
+		if err != nil {
+			return serverState{}, err
+		}
 	}
 
 	for name, supported := range features {
@@ -502,6 +539,121 @@ func (w *Watcher) requestServerSwitch() {
 	if w.cancelForSwitch != nil {
 		w.cancelForSwitch()
 	}
+}
+
+// recoverFromUnauthenticated obtains a new ACL token if err is a
+// codes.Unauthenticated status and the Watcher is using auth method
+// credentials. It reports whether a usable new token is now in place, so the
+// caller can retry the request that failed.
+//
+// staleToken is the token the failed request was made with. If a re-login is
+// declined because one just happened on another goroutine, typically from the
+// gRPC error interceptor, the token is compared against staleToken so that the
+// caller still retries with the credentials that concurrent login produced.
+//
+// It returns false, without attempting anything, for any other error code and
+// for static credentials, where there is nothing to re-acquire and
+// Unauthenticated means a misconfiguration that should stay visible.
+func (w *Watcher) recoverFromUnauthenticated(err error, staleToken string) bool {
+	if status.Code(err) != codes.Unauthenticated {
+		return false
+	}
+	if w.config.Credentials.Type != CredentialsTypeLogin {
+		return false
+	}
+	if w.relogin() {
+		return true
+	}
+
+	current, _ := w.token.Load().(string)
+	return current != "" && current != staleToken
+}
+
+// reloginOnUnauthenticated is the entry point used by the gRPC error
+// interceptor, which sees Unauthenticated responses to every request on the
+// connection, not just the ones connect() makes.
+func (w *Watcher) reloginOnUnauthenticated() {
+	if w.config.Credentials.Type != CredentialsTypeLogin {
+		return
+	}
+
+	// Only react if we actually presented a token. With nothing in w.token the
+	// request went out unauthenticated, so the rejection does not mean "our
+	// token was deleted": it is the Login call itself being refused, or a
+	// request issued before the initial login completed. Logging in again is
+	// not the right response to either, and doing so would turn a rejected
+	// bearer token into a second login attempt on every failed request.
+	if token, _ := w.token.Load().(string); token == "" {
+		return
+	}
+
+	w.relogin()
+}
+
+// relogin discards the cached ACL token and obtains a new one from the auth
+// method. It reports whether a fresh token was stored.
+//
+// Both caches have to be cleared for this to work. ACLs.Reset clears the token
+// inside ACLs, which otherwise makes Login return ErrAlreadyLoggedIn, and
+// w.token is cleared because connect() only attempts a login while it is empty.
+// Clearing just one of them leaves the Watcher stuck on the old token.
+//
+// This is safe to call from any goroutine, including from the gRPC error
+// interceptor. It does not block: if a re-login is already running, or if one
+// completed less than MinReloginInterval ago, it returns immediately.
+func (w *Watcher) relogin() bool {
+	if !w.reloginLock.TryLock() {
+		// re-login currently in progress. This also stops the Login call below
+		// from recursing, since that request passes back through the gRPC error
+		// interceptor that may have called us.
+		return false
+	}
+	defer w.reloginLock.Unlock()
+
+	if w.acls == nil {
+		// Not logged in yet; connect() has not run the initial login.
+		return false
+	}
+
+	// Rate limit, so that a burst of rejected requests, or a bearer token that
+	// is itself invalid, cannot become a login storm against the auth method.
+	if !w.lastRelogin.IsZero() && w.clock.Now().Sub(w.lastRelogin) < w.config.MinReloginInterval {
+		w.log.Debug("skipping ACL auth method re-login; too soon since the last one")
+		metrics.IncrCounterWithLabels([]string{"relogins"}, 1,
+			[]metrics.Label{{Name: "result", Value: "rate_limited"}})
+		return false
+	}
+
+	w.log.Warn("ACL token rejected as Unauthenticated; it may have been deleted, re-logging in")
+
+	// Record the attempt before making it, not after it succeeds. A bearer
+	// token that Consul rejects makes Login fail every time, and if only
+	// successes were recorded the rate limit would never engage and each
+	// rejected request would trigger another login.
+	w.lastRelogin = w.clock.Now()
+
+	// Only the ACLs cache is cleared here. w.token deliberately keeps the old
+	// value until a replacement is available: interceptContext reads it on
+	// every outbound request, so blanking it first would send untokenized
+	// requests for the duration of the login.
+	w.acls.Reset()
+
+	accessorId, secretId, err := w.acls.Login(w.ctx)
+	if err != nil {
+		w.log.Error("ACL auth method re-login failed", "error", err)
+		metrics.IncrCounterWithLabels([]string{"relogins"}, 1,
+			[]metrics.Label{{Name: "result", Value: "failure"}})
+		return false
+	}
+	w.log.Info("ACL auth method re-login succeeded", "accessorID", accessorId)
+	metrics.IncrCounterWithLabels([]string{"relogins"}, 1,
+		[]metrics.Label{{Name: "result", Value: "success"}})
+	w.token.Store(secretId)
+
+	// Consumers hold their own copy of the token from Subscribe/State, so they
+	// must be told about the new one or they will keep using the deleted token.
+	w.notifySubscribers()
+	return true
 }
 
 func (w *Watcher) getDataplaneFeatures() (map[string]bool, error) {
