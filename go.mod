@@ -1,6 +1,6 @@
 module github.com/hashicorp/consul-server-connection-manager
 
-go 1.25.0
+go 1.25.13
 
 require (
 	github.com/cenkalti/backoff/v4 v4.1.3
