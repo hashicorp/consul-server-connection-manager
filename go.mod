@@ -11,7 +11,7 @@ require (
 	github.com/hashicorp/go-metrics v0.5.4
 	github.com/hashicorp/go-netaddrs v0.1.0
 	github.com/stretchr/testify v1.11.1
-	google.golang.org/grpc v1.83.2
+	google.golang.org/grpc v1.84.0
 )
 
 require (
